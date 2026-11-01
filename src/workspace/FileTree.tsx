@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   ChevronDown,
   ChevronRight,
@@ -17,6 +17,7 @@ import {
   Trash2,
   Upload,
   BookMarked,
+  ExternalLink,
 } from "lucide-react";
 import { ConfirmDialog, PromptDialog } from "../components/Dialog";
 import { ContextMenu, type MenuItem } from "../components/Menu";
@@ -65,6 +66,13 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
     if (!node.isDir && node.name.toLowerCase().endsWith(".tex") && node.path !== ws.project?.mainDocument) {
       items.push({ label: "Set as main document", icon: <Star size={15} />, onSelect: () => void ws.setMainDocument(node.path) });
     }
+    if (!node.isDir && node.name.toLowerCase().endsWith(".pdf")) {
+      items.push({
+        label: "Open in PDF app",
+        icon: <ExternalLink size={15} />,
+        onSelect: () => void openPath(`${ws.project!.path}\\${node.path.replaceAll("/", "\\")}`),
+      });
+    }
     items.push(
       { label: "Rename", icon: <Pencil size={15} />, hint: "F2", onSelect: () => setDialog({ kind: "rename", node }) },
       { label: "Show in File Explorer", icon: <FolderOpen size={15} />, onSelect: () => reveal(node.path) },
@@ -85,6 +93,7 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
     const Icon = iconFor(node, open);
     const isActive = node.path === ws.active;
     const isMain = node.path === ws.project?.mainDocument;
+    const isOutput = node.path === ws.project?.outputPdf;
     const dirty = ws.status[node.path]?.dirty;
     return (
       <div key={node.path} data-drop-dir={node.isDir ? node.path : undefined}>
@@ -108,6 +117,14 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
           <Icon size={15} className={`shrink-0 ${node.isDir ? "text-accent" : "text-muted"}`} />
           <span className="truncate">{node.name}</span>
           {dirty && <span className="size-1.5 shrink-0 rounded-full bg-text/70" aria-label="Unsaved" />}
+          {isOutput && (
+            <span
+              className="ml-auto shrink-0 rounded bg-emerald-500/15 px-1.5 text-[10px] text-emerald-400"
+              title="The compiled PDF. Texo updates it after each successful compile."
+            >
+              output
+            </span>
+          )}
           {isMain && (
             <span className="ml-auto shrink-0 rounded bg-accent/15 px-1.5 text-[10px] text-accent" title="Main document">
               main

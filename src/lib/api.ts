@@ -24,6 +24,8 @@ export interface ProjectSummary {
   external: boolean;
   /** First page of the last PDF, as a PNG data URL. */
   thumbnail: string | null;
+  /** The PDF Texo keeps in the project folder (e.g. `main.pdf`). */
+  outputPdf: string | null;
 }
 
 export interface FileEntry {
@@ -106,7 +108,12 @@ export interface CompileResult {
   output: string;
   /** The project's latexmkrc was skipped because the project isn't trusted. */
   rcIgnored: boolean;
+  /** Where the PDF was saved in the project folder (successful compiles only). */
+  savedPdf: string | null;
 }
+
+/** Window event asking the workspace to show the PDF preview. */
+export const SHOW_PDF_EVENT = "texo:show-pdf";
 
 /** Payload of the `compile-output` event: console lines as the tools run. */
 export interface OutputChunk {

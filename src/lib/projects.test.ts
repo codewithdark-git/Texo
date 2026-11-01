@@ -14,6 +14,7 @@ function project(name: string, lastEdited: string, createdAt = lastEdited): Proj
     fileCount: 1,
     external: false,
     thumbnail: null,
+    outputPdf: null,
   };
 }
 

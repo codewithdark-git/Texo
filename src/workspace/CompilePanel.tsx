@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertCircle, AlertTriangle, ExternalLink, Info, Lightbulb, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
-import type { Issue, Severity } from "../lib/api";
+import { SHOW_PDF_EVENT, type Issue, type Severity } from "../lib/api";
 import { Button } from "../components/Dialog";
 import { useCompile } from "./compileStore";
 import { revealSource } from "./EditorPane";
@@ -54,6 +54,12 @@ export function CompilePanel() {
     if (!c.result.pdfPath && c.result.status !== "aborted") setTab("issues");
     else if (c.result.status === "success") setTab((t) => (t === "issues" ? "pdf" : t));
   }, [c.result]);
+
+  useEffect(() => {
+    const show = () => setTab("pdf");
+    window.addEventListener(SHOW_PDF_EVENT, show);
+    return () => window.removeEventListener(SHOW_PDF_EVENT, show);
+  }, []);
 
   // Follow the live output while compiling.
   useEffect(() => {

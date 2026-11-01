@@ -203,6 +203,8 @@ pub struct CompileResult {
     pub output: String,
     /// The project has a latexmkrc that was skipped because the project isn't trusted.
     pub rc_ignored: bool,
+    /// Where the PDF was saved in the project folder (successful compiles only).
+    pub saved_pdf: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -470,6 +472,7 @@ pub fn compile(job: &Job) -> CompileResult {
         log: String::new(),
         output: String::new(),
         rc_ignored: false,
+        saved_pdf: None,
     };
 
     let main_path = job.root.join(job.main);

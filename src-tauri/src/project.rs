@@ -38,6 +38,9 @@ pub struct ProjectMeta {
     pub engine: Engine,
     pub created_at: DateTime<Utc>,
     pub format_version: u32,
+    /// The PDF Texo saves into the project after each successful compile.
+    #[serde(default)]
+    pub output_pdf: Option<String>,
 }
 
 /// What the dashboard shows for one project.
@@ -56,6 +59,8 @@ pub struct ProjectSummary {
     pub external: bool,
     /// First page of the last PDF, as a PNG data URL.
     pub thumbnail: Option<String>,
+    /// Project-relative path of the saved PDF, if Texo has written one.
+    pub output_pdf: Option<String>,
 }
 
 const THUMBNAIL_FILE: &str = "thumbnail.png";
@@ -163,6 +168,7 @@ fn new_meta(name: String, main_document: Option<String>) -> ProjectMeta {
         engine: Engine::default(),
         created_at: Utc::now(),
         format_version: FORMAT_VERSION,
+        output_pdf: None,
     }
 }
 
@@ -252,6 +258,7 @@ pub fn summarize(dir: &Path, external: bool) -> Option<ProjectSummary> {
         file_count,
         external,
         thumbnail: read_thumbnail(dir),
+        output_pdf: meta.output_pdf.clone(),
     })
 }
 
@@ -422,6 +429,46 @@ pub fn set_engine(dir: &Path, engine: Engine) -> AppResult<()> {
     write_meta(dir, &meta)
 }
 
+/// Copies the compiled PDF next to the main document (`paper/main.tex` →
+/// `paper/main.pdf`), so the project folder always holds the latest PDF.
+///
+/// Texo only ever replaces a PDF it wrote itself: if the user already has a
+/// file with that name, the copy goes to `main (compiled).pdf` instead, and
+/// if that is taken too, nothing is saved. Returns the project-relative path.
+pub fn save_output_pdf(dir: &Path, main: &str, built: &Path) -> AppResult<Option<String>> {
+    let mut meta = ensure_meta(dir)?;
+    let main_rel = Path::new(main);
+    let stem = main_rel.file_stem().unwrap_or_default().to_string_lossy();
+    let folder = main_rel.parent().unwrap_or(Path::new(""));
+    let candidates = [format!("{stem}.pdf"), format!("{stem} (compiled).pdf")]
+        .map(|name| to_slash(&folder.join(name)));
+    let Some(target) = candidates
+        .into_iter()
+        .find(|c| meta.output_pdf.as_deref() == Some(c.as_str()) || !dir.join(c).exists())
+    else {
+        return Ok(None);
+    };
+
+    // Copy through a temporary file (ignored by the folder watcher) and a
+    // rename, so a half-written PDF never appears and a link at the target
+    // is replaced rather than written through.
+    let dest = dir.join(&target);
+    let tmp = dest.with_file_name(format!(".{}.texo-tmp", dest.file_name().unwrap_or_default().to_string_lossy()));
+    if is_link(&tmp) {
+        fs::remove_file(&tmp)?;
+    }
+    fs::copy(built, &tmp)?;
+    if let Err(e) = fs::rename(&tmp, &dest) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    if meta.output_pdf.as_deref() != Some(target.as_str()) {
+        meta.output_pdf = Some(target.clone());
+        write_meta(dir, &meta)?;
+    }
+    Ok(Some(target))
+}
+
 /// Moves the project folder to the Recycle Bin, so it can be recovered.
 pub fn delete(dir: &Path) -> AppResult<()> {
     trash::delete(dir)?;
@@ -583,6 +630,40 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+    }
+
+    #[test]
+    fn saves_the_pdf_next_to_the_main_document_without_clobbering_user_files() {
+        let root = tempfile::tempdir().unwrap();
+        let p = create(root.path(), "Paper", Template::Blank).unwrap();
+        let dir = PathBuf::from(&p.path);
+        let built = root.path().join("built.pdf");
+        fs::write(&built, "%PDF-1 first").unwrap();
+
+        // First save creates main.pdf and remembers it.
+        assert_eq!(save_output_pdf(&dir, "main.tex", &built).unwrap().as_deref(), Some("main.pdf"));
+        assert_eq!(read_meta(&dir).unwrap().output_pdf.as_deref(), Some("main.pdf"));
+        // Later saves replace it: still one file, now updated.
+        fs::write(&built, "%PDF-1 second").unwrap();
+        assert_eq!(save_output_pdf(&dir, "main.tex", &built).unwrap().as_deref(), Some("main.pdf"));
+        assert_eq!(fs::read_to_string(dir.join("main.pdf")).unwrap(), "%PDF-1 second");
+        assert!(!fs::read_dir(&dir).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".texo-tmp")));
+
+        // A main document in a subfolder gets its PDF beside it.
+        fs::create_dir_all(dir.join("thesis")).unwrap();
+        assert_eq!(save_output_pdf(&dir, "thesis/book.tex", &built).unwrap().as_deref(), Some("thesis/book.pdf"));
+
+        // The user's own report.pdf is never overwritten.
+        fs::write(dir.join("report.pdf"), "mine").unwrap();
+        assert_eq!(
+            save_output_pdf(&dir, "report.tex", &built).unwrap().as_deref(),
+            Some("report (compiled).pdf")
+        );
+        assert_eq!(fs::read_to_string(dir.join("report.pdf")).unwrap(), "mine");
+        // …and when both names belong to the user, nothing is saved.
+        fs::write(dir.join("notes.pdf"), "mine").unwrap();
+        fs::write(dir.join("notes (compiled).pdf"), "also mine").unwrap();
+        assert_eq!(save_output_pdf(&dir, "notes.tex", &built).unwrap(), None);
     }
 
     #[test]

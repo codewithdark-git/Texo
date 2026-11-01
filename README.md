@@ -1,47 +1,98 @@
 # Texo
 
-A desktop AI LaTeX editor for Windows. Projects are plain folders on your disk, compiling works offline, and the AI assistant uses your own provider key.
+**Write LaTeX on your own machine.** Texo is a desktop LaTeX editor for Windows with a live PDF preview, clear compile errors, and jumps between your source and the PDF. Your projects stay plain folders on your disk, and they compile offline with the TeX you already have.
 
-> Early development. The dashboard, editor, compiler, and PDF preview work; the AI assistant comes next. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+![Texo: the LaTeX source on the left and the live PDF preview on the right](docs/screenshot.png)
 
-## What works now
+> **Pre-release.** Texo is in active development toward its first full release (`v0.1.0`). The alpha builds already let you write, compile and preview real papers. An AI writing assistant comes next. [Download the latest alpha →](https://github.com/codewithdark-git/Texo/releases)
 
-- A dashboard of your projects, in a list or a grid, with search and sorting by name, last edited, or created date.
-- New blank or example project.
-- Open any existing LaTeX folder. Texo finds the main `.tex` file.
+## Why Texo
+
+- **Your files, your disk.** A project is an ordinary folder. Texo keeps its own data in a hidden `.texo/` subfolder and never rewrites your sources behind your back.
+- **Fast feedback.** Save, and the PDF updates beside the editor. Errors link straight to the line that caused them.
+- **Works offline.** It compiles with MiKTeX or TeX Live on your PC. No account and no upload.
+- **Safe with other people's projects.** Downloaded projects can't run their own build scripts until you trust them.
+
+## Features
+
+### Projects
+- A dashboard of your projects as a list or a grid of first-page thumbnails, with search and sorting.
+- Start from a blank or an example paper, or open any existing LaTeX folder. Texo finds the main `.tex` file.
 - Rename, duplicate, show in File Explorer, and move to the Recycle Bin.
-- Choose where new projects are saved (default: `Documents\Texo`).
-- **Editor** (Monaco) with LaTeX and BibTeX highlighting, folding, sticky section headers, and warnings for look-alike Unicode characters.
-- **Completions** for LaTeX commands, environments (`\begin{…}` inserts the matching `\end`), `\ref` labels, `\cite` keys from your `.bib` files (searchable by title and author), commands you define with `\newcommand`, and file paths for `\input`, `\include`, `\includegraphics`, and `\bibliography`.
-- **Autosave** a moment after you stop typing, plus Ctrl+S. Files are written safely through a temporary file.
-- **File tree**: new file or folder, rename or move, set the main document, show in File Explorer, move to the Recycle Bin. Drop files from File Explorer onto a folder to copy them in.
-- **Tabs**, an **outline** of the open file, image previews, and a status bar.
-- Edits made in other apps show up right away. If a file changes on disk while you have unsaved edits, Texo asks which version to keep.
-- **Compiling** with the TeX already on your PC (MiKTeX or TeX Live): pdfLaTeX, XeLaTeX, or LuaLaTeX, run through latexmk, or directly when Perl isn't available. BibTeX and Biber run automatically, and a project's `.latexmkrc` is respected. Tectonic is used if it's installed. Build files go to `.texo/build/`.
-- Compiles automatically after each save (can be turned off), or press Compile / Ctrl+Enter. A running compile can be stopped, and stops on its own after 4 minutes.
-- **Issues panel**: errors, warnings, and layout warnings parsed from the TeX, BibTeX, and Biber logs, with filters, TeX's error context, plain-language hints for common problems, and click-to-jump to the line. Errors and warnings also show as squiggles in the editor.
-- The console output streams live in the Log tab, and the full TeX log is one click away.
-- **PDF preview** (pdf.js) next to the editor: fit width or page, zoom (also Ctrl+mouse wheel), page jump, find in PDF (Ctrl+F), a dark mode for the page, selectable text, clickable links, and "open in your PDF app". It keeps your zoom and scroll position when the PDF updates.
-- **SyncTeX**: double-click anywhere in the PDF to jump to that source line, or press Ctrl+Alt+J (or the crosshair button) to highlight the cursor's position in the PDF.
-- The dashboard grid shows each project's first page.
-- **Project trust**: a `latexmkrc` file is Perl code, so it only runs for projects you create in Texo or choose to trust. Folders opened from disk compile with it skipped until you click "Trust this project". Shell escape is always off.
-- Shortcuts: Ctrl+S save, Ctrl+Enter compile, Ctrl+Alt+J show in PDF, Ctrl+B bold, Ctrl+I italic, Alt+Z word wrap, F2 rename in the file tree.
+
+### Editor
+- The Monaco editor (the one inside VS Code) with LaTeX and BibTeX highlighting, folding, sticky section headers, and warnings for look-alike Unicode characters.
+- **Completions** for:
+  - LaTeX commands, and environments (`\begin{…}` inserts the matching `\end`).
+  - `\ref` labels, and `\cite` keys from your `.bib` files (search by key, title or author).
+  - Commands you define with `\newcommand`.
+  - File paths for `\input`, `\include`, `\includegraphics` and `\bibliography`.
+- Autosave, tabs, an outline of the current file, image previews, and a file tree. In the tree you can create, rename and move files, drop files in from File Explorer, and choose the main document.
+- Edits made in other apps appear right away. If a file changes on disk while you have unsaved edits, Texo asks which version to keep.
+
+### Compiling
+- **Toolchains:** pdfLaTeX, XeLaTeX or LuaLaTeX, run through latexmk or directly. BibTeX and Biber run automatically. Tectonic is supported if it's installed.
+- **When it runs:** automatically after each save, or with Compile / Ctrl+Enter. A running compile can be stopped.
+- **Issues panel:** errors, warnings and layout problems, read from the TeX, BibTeX and Biber logs. Each shows TeX's context and links to its line, and they also appear as squiggles in the editor. Common problems come with plain-language hints.
+- **Live log** while compiling, plus the full TeX log.
+
+### PDF
+- **Built-in viewer:** fit width or fit page, zoom (Ctrl+mouse wheel too), find (Ctrl+F), selectable text, clickable links, and a dark page mode. It keeps your place when the PDF updates.
+- **SyncTeX:**
+  - Double-click the PDF to jump to the source line.
+  - Press Ctrl+Alt+J to highlight the cursor's spot in the PDF.
+- **Always a PDF in your project:** after each successful compile, Texo saves the PDF next to your main file (`main.tex` → `main.pdf`). It's one file, kept up to date, and a failed compile never replaces it. If you already have a file with that name, Texo leaves it alone.
+
+### Shortcuts
+
+| Keys | Action |
+|---|---|
+| Ctrl+S | Save |
+| Ctrl+Enter | Compile |
+| Ctrl+Alt+J | Show the cursor's position in the PDF |
+| Double-click PDF | Jump to the source line |
+| Ctrl+B / Ctrl+I | Bold / italic |
+| Alt+Z | Toggle word wrap |
+| F2 | Rename in the file tree |
+
+## Install
+
+1. Install [MiKTeX](https://miktex.org/download) or [TeX Live](https://tug.org/texlive/) if you don't have a TeX distribution yet.
+2. Download `Texo_…_x64-setup.exe` from the [releases page](https://github.com/codewithdark-git/Texo/releases) and run it.
+
+The alpha installers aren't code-signed yet, so Windows SmartScreen may warn you. Choose **More info → Run anyway**. Texo installs for the current user and needs WebView2, which comes with Windows 11; the installer fetches it on older systems.
 
 ## How a project is stored
 
 ```
 My paper/
 ├── main.tex
+├── main.pdf           # the latest compiled PDF, kept up to date by Texo
 ├── references.bib
 └── .texo/
-    └── project.json   # id, name, main document, engine
+    ├── project.json   # name, main document, engine
+    └── build/         # aux files, logs, SyncTeX data
 ```
 
-Texo only writes inside `.texo/`. Your LaTeX files stay untouched, and the folder still works in any other editor.
+The folder still works in any other LaTeX editor.
+
+## Security
+
+- **Project trust:** a project's `latexmkrc` is Perl code, so it only runs for projects you created in Texo or chose to trust.
+- **No shell escape:** shell escape is off for every project.
+- **Absolute tool paths:** tools run by absolute path, so a project can't substitute its own `pdflatex.exe`.
+- **No writing through links:** Texo won't write through links planted in `.texo/`.
+
+## Roadmap
+
+- **Next alpha:** import and export of zip files, more templates, a word count panel, a settings screen.
+- **Then:** an AI assistant with your own provider key (OpenAI, Anthropic or a local model), with proposed changes you keep or undo, and Fix / Edit / Proofread with AI.
+- **v0.1.0:** version history with restore, and a real-paper compile test suite.
+- **Later:** Zotero, Beamer presentation mode, collaboration, Git sync, macOS and Linux.
 
 ## Development
 
-Requirements: Node 24+, pnpm, Rust (stable, MSVC), and Visual Studio Build Tools with the C++ workload. WebView2 ships with Windows 11.
+Requirements: Node 24+, pnpm, Rust (stable, MSVC), and Visual Studio Build Tools with the C++ workload.
 
 ```bash
 pnpm install
@@ -51,42 +102,40 @@ pnpm install
 pnpm tauri dev
 ```
 
-Tests:
+Run every check (typecheck, frontend tests, Rust tests), the same as CI:
 
 ```bash
-pnpm typecheck && pnpm test
+pnpm check
 ```
+
+With MiKTeX or TeX Live installed, also compile real documents. These tests cover latexmk and the direct engine, SyncTeX, and the security guards:
 
 ```bash
-cd src-tauri && cargo test
+pnpm test:tex
 ```
 
-With MiKTeX or TeX Live installed, this also compiles a real document through latexmk and the engine directly:
-
-```bash
-cd src-tauri && cargo test -- --ignored
-```
-
-Build an installer (unsigned) into `src-tauri/target/release/bundle/nsis/`:
+Build the installer into `src-tauri/target/release/bundle/nsis/`:
 
 ```bash
 pnpm tauri build
 ```
 
-## Layout
+### Code layout
 
 | Path | What |
 |---|---|
-| `src/` | React UI (Vite, Tailwind, Zustand) |
+| `src/components/` | Dashboard and shared UI |
+| `src/workspace/` | Workspace: file tree, tabs, outline, autosave, compile panel, PDF viewer |
+| `src/editor/` | Monaco setup, LaTeX/BibTeX grammars, themes, completions |
 | `src/lib/api.ts` | Typed wrappers for the Rust commands |
-| `src-tauri/src/project.rs` | Project folder model: create, scan, rename, duplicate, delete |
-| `src-tauri/src/fsops.rs` | File reads and writes, confined to the project folder |
-| `src-tauri/src/watcher.rs` | Tells the UI when files change on disk |
-| `src-tauri/src/symbols.rs` | Finds labels, citation keys, and custom commands for completions |
+| `src-tauri/src/project.rs` | Project folders: create, scan, rename, duplicate, saved PDF |
+| `src-tauri/src/fsops.rs` | File reads and writes, confined to the project |
 | `src-tauri/src/compile.rs` | Finds TeX tools and runs latexmk, the engine, or Tectonic |
 | `src-tauri/src/texlog.rs` | Turns TeX/BibTeX/Biber logs into issues |
-| `src-tauri/src/synctex.rs` | Reads `.synctex.gz` for jumps between source and PDF |
-| `src-tauri/src/commands.rs` | Tauri commands the UI calls |
-| `src/workspace/` | The editor workspace: file tree, tabs, outline, autosave |
-| `src/editor/` | Monaco setup, LaTeX/BibTeX grammars, themes, completions |
-| `src-tauri/templates/` | Starter projects |
+| `src-tauri/src/synctex.rs` | Reads SyncTeX data for jumps between source and PDF |
+| `src-tauri/src/watcher.rs` | Notices file changes made outside Texo |
+| `src-tauri/src/symbols.rs` | Finds labels, citations, and commands for completions |
+
+## License
+
+[MIT](LICENSE)

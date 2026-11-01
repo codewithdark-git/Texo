@@ -166,6 +166,11 @@ export const useCompile = create<CompileStore>((set, get) => {
       // The workspace was reset or closed while this ran; its result is stale.
       if (run !== currentRun) return;
       set({ compiling: false, error, ...(result ? { result } : {}) });
+      // The saved PDF shows up in the file tree with its badge.
+      const project = useWorkspace.getState().project;
+      if (result?.savedPdf && project && project.outputPdf !== result.savedPdf) {
+        useWorkspace.setState({ project: { ...project, outputPdf: result.savedPdf } });
+      }
       if (result) applyMarkers(result.issues);
       if (get().queued) void get().compile();
     },

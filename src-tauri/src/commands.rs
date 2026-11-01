@@ -321,7 +321,7 @@ pub async fn compile_project(
                 compile::OutputChunk { project: project.clone(), lines },
             );
         };
-        compile::compile(&compile::Job {
+        let mut result = compile::compile(&compile::Job {
             root: &dir,
             main: &main,
             engine: meta.engine,
@@ -330,7 +330,18 @@ pub async fn compile_project(
             cancel: worker_cancel,
             trusted,
             on_output: &emit,
-        })
+        });
+        // Keep the latest good PDF in the project folder; a failed compile
+        // never replaces it.
+        if result.status == compile::Status::Success {
+            if let Some(built) = result.pdf_path.as_deref() {
+                match project::save_output_pdf(&dir, &main, Path::new(built)) {
+                    Ok(saved) => result.saved_pdf = saved,
+                    Err(e) => result.hints.push(format!("The PDF couldn't be saved into the project folder: {e}")),
+                }
+            }
+        }
+        result
     })
     .await
     .map_err(|e| AppError::msg(e.to_string()))?;
@@ -354,6 +365,7 @@ fn no_run(status: compile::Status, engine: Engine) -> CompileResult {
         log: String::new(),
         output: String::new(),
         rc_ignored: false,
+        saved_pdf: None,
     }
 }
 

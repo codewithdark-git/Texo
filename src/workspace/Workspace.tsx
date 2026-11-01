@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, Columns2, FileCode2, FileText, ListTree, Files, X } from "lucide-react";
-import type { ProjectSummary } from "../lib/api";
+import { SHOW_PDF_EVENT, type ProjectSummary } from "../lib/api";
 import { useApp } from "../store";
 import { Button } from "../components/Dialog";
 import { useCompile } from "./compileStore";
@@ -84,6 +84,13 @@ export function Workspace({ project }: { project: ProjectSummary }) {
       void useWorkspace.getState().teardown();
     };
   }, [project.path]);
+
+  // Showing the PDF needs the preview pane visible.
+  useEffect(() => {
+    const show = () => setPrefs((p) => (p.layout === "code" ? { ...p, layout: "split" } : p));
+    window.addEventListener(SHOW_PDF_EVENT, show);
+    return () => window.removeEventListener(SHOW_PDF_EVENT, show);
+  }, []);
 
   // Ctrl+Enter compiles from anywhere (the editor handles it itself too).
   useEffect(() => {

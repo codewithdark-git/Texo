@@ -4,6 +4,7 @@ import {
   api,
   errorText,
   FS_CHANGED_EVENT,
+  SHOW_PDF_EVENT,
   type FileEntry,
   type FsChanged,
   type ProjectSummary,
@@ -259,6 +260,11 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     },
 
     openFile: async (path) => {
+      // The saved PDF opens in the preview rather than as an editor tab.
+      if (path === get().project?.outputPdf) {
+        window.dispatchEvent(new Event(SHOW_PDF_EVENT));
+        return;
+      }
       set((s) => ({ tabs: s.tabs.includes(path) ? s.tabs : [...s.tabs, path], active: path }));
       const existing = get().views[path];
       if (existing && existing.kind !== "error") return;

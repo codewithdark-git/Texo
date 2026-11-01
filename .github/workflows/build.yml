@@ -28,14 +28,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck and test frontend
-        run: |
-          pnpm typecheck
-          pnpm test
-
-      - name: Test Rust core
-        working-directory: src-tauri
-        run: cargo test --locked
+      - name: Typecheck and run all tests
+        run: pnpm check
 
       - name: Build unsigned installer
         run: pnpm tauri build
