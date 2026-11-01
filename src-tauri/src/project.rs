@@ -330,6 +330,16 @@ pub fn duplicate(dir: &Path, root: &Path) -> AppResult<ProjectSummary> {
     summarize(&target, false).ok_or_else(|| AppError::msg("Copy was created but can't be read."))
 }
 
+/// Sets the file to compile. `file` is relative, with `/` separators.
+pub fn set_main_document(dir: &Path, file: &str) -> AppResult<()> {
+    if !dir.join(file).is_file() {
+        return Err(AppError::msg("That file doesn't exist."));
+    }
+    let mut meta = ensure_meta(dir)?;
+    meta.main_document = Some(file.replace('\\', "/"));
+    write_meta(dir, &meta)
+}
+
 /// Moves the project folder to the Recycle Bin, so it can be recovered.
 pub fn delete(dir: &Path) -> AppResult<()> {
     trash::delete(dir)?;
