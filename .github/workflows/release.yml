@@ -94,10 +94,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          ls -la installers
+          # Artifacts keep their folders (appimage/, deb/), so upload every file.
+          find installers -type f -print
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             flag=""
             [[ "$TAG" == *-* ]] && flag="--prerelease"
             gh release create "$TAG" $flag --title "Texo $TAG" --notes "Installers for $TAG."
           fi
-          gh release upload "$TAG" installers/* --clobber
+          find installers -type f -print0 | xargs -0 gh release upload "$TAG" --clobber
