@@ -1,0 +1,78 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+
+\newtheorem{theorem}{Theorem}
+
+\title{A Short Example Paper}
+\author{Your Name \\ \small Your Institution}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This example shows the pieces most papers need: sections, equations,
+a theorem, a table, cross-references, and a bibliography. Edit any part
+of it, compile, and watch the PDF update.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Writing in \LaTeX{} separates content from layout. Cross-references such
+as Section~\ref{sec:method} and Equation~\eqref{eq:energy} update by
+themselves, and citations come from a \texttt{.bib} file~\cite{knuth1984}.
+
+\section{Method}
+\label{sec:method}
+
+Consider a particle of mass $m$ moving with velocity $v$. Its kinetic
+energy is
+\begin{equation}
+  E_k = \frac{1}{2} m v^2 .
+  \label{eq:energy}
+\end{equation}
+
+\begin{theorem}
+For every real $x$, $x^2 \geq 0$.
+\end{theorem}
+
+\begin{proof}
+If $x \geq 0$ the product of two non-negative numbers is non-negative;
+otherwise $x^2 = (-x)^2$ with $-x > 0$.
+\end{proof}
+
+\section{Results}
+
+Table~\ref{tab:results} lists a few made-up measurements.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Trial & Mass (kg) & Energy (J) \\
+    \midrule
+    A & 1.0 & 2.0 \\
+    B & 2.5 & 7.8 \\
+    C & 4.0 & 18.0 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Example measurements.}
+  \label{tab:results}
+\end{table}
+
+\section{Conclusion}
+
+Replace this text with your own work.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
