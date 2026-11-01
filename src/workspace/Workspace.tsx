@@ -5,6 +5,9 @@ import { ArrowLeft, Columns2, FileCode2, FileText, ListTree, Files, X } from "lu
 import type { ProjectSummary } from "../lib/api";
 import { useApp } from "../store";
 import { Button } from "../components/Dialog";
+import { useCompile } from "./compileStore";
+import { CompileControls } from "./CompileControls";
+import { CompilePanel } from "./CompilePanel";
 import { EditorPane } from "./EditorPane";
 import { FileTree } from "./FileTree";
 import { Outline } from "./Outline";
@@ -65,15 +68,34 @@ export function Workspace({ project }: { project: ProjectSummary }) {
     });
 
   const close = async () => {
+    useCompile.getState().reset();
     await useWorkspace.getState().teardown();
     void useApp.getState().refresh().catch(() => {});
     useApp.getState().open(null);
   };
 
   useEffect(() => {
-    void useWorkspace.getState().init(project);
-    return () => void useWorkspace.getState().teardown();
+    void useWorkspace
+      .getState()
+      .init(project)
+      .then(() => useCompile.getState().init());
+    return () => {
+      useCompile.getState().reset();
+      void useWorkspace.getState().teardown();
+    };
   }, [project.path]);
+
+  // Ctrl+Enter compiles from anywhere (the editor handles it itself too).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "Enter" && !e.defaultPrevented) {
+        e.preventDefault();
+        void useCompile.getState().compile();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Save everything before the window closes.
   useEffect(() => {
@@ -115,7 +137,10 @@ export function Workspace({ project }: { project: ProjectSummary }) {
           <ArrowLeft size={16} />
         </Button>
         <h1 className="truncate font-semibold">{name}</h1>
-        <div className="ml-auto flex rounded-lg border border-border bg-surface p-0.5">
+        <div className="ml-auto">
+          <CompileControls />
+        </div>
+        <div className="flex rounded-lg border border-border bg-surface p-0.5">
           {(
             [
               ["code", "Code only", FileCode2],
@@ -214,25 +239,11 @@ export function Workspace({ project }: { project: ProjectSummary }) {
           )}
           {showPdf && (
             <section style={{ flex: showCode ? 1 - prefs.split : 1 }} className="flex min-w-0 flex-col bg-surface-2/40">
-              <PreviewPlaceholder />
+              <CompilePanel />
             </section>
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function PreviewPlaceholder() {
-  const main = useWorkspace((s) => s.project?.mainDocument);
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-muted">
-      <FileText size={30} className="text-accent" />
-      <p className="font-medium text-text">PDF preview</p>
-      <p className="max-w-xs text-sm">
-        Compiling and the live PDF preview come in the next builds. Your main document is{" "}
-        <span className="font-mono text-text">{main ?? "not set"}</span>.
-      </p>
     </div>
   );
 }

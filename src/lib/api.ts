@@ -4,9 +4,12 @@ import { invoke } from "@tauri-apps/api/core";
 export type Engine = "pdflatex" | "xelatex" | "lualatex";
 export type Template = "blank" | "example";
 
+export type Compiler = "auto" | "latexmk" | "direct" | "tectonic";
+
 export interface Settings {
   projectsRoot: string;
   externalProjects: string[];
+  compiler: Compiler;
 }
 
 export interface ProjectSummary {
@@ -62,6 +65,53 @@ export interface FsChanged {
 
 export const FS_CHANGED_EVENT = "project-fs-changed";
 
+export interface Toolchains {
+  latexmk: string | null;
+  perl: string | null;
+  pdflatex: string | null;
+  xelatex: string | null;
+  lualatex: string | null;
+  bibtex: string | null;
+  biber: string | null;
+  tectonic: string | null;
+  distribution: string | null;
+}
+
+export type Severity = "error" | "warning" | "badbox";
+
+export interface Issue {
+  severity: Severity;
+  message: string;
+  /** Project-relative path, or null for files outside the project. */
+  file: string | null;
+  line: number | null;
+  context: string | null;
+}
+
+export type CompileStatus = "success" | "failed" | "aborted" | "timeout" | "noEngine" | "noMainDocument";
+
+export interface CompileResult {
+  status: CompileStatus;
+  compiler: Compiler | null;
+  engine: Engine;
+  pdfPath: string | null;
+  durationMs: number;
+  issues: Issue[];
+  hints: string[];
+  log: string;
+  output: string;
+  /** The project's latexmkrc was skipped because the project isn't trusted. */
+  rcIgnored: boolean;
+}
+
+/** Payload of the `compile-output` event: console lines as the tools run. */
+export interface OutputChunk {
+  project: string;
+  lines: string[];
+}
+
+export const COMPILE_OUTPUT_EVENT = "compile-output";
+
 export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   setProjectsRoot: (path: string) => invoke<Settings>("set_projects_root", { path }),
@@ -92,6 +142,14 @@ export const api = {
   projectSymbols: (path: string) => invoke<Symbols>("project_symbols", { path }),
   watchProject: (path: string) => invoke<void>("watch_project", { path }),
   unwatchProject: () => invoke<void>("unwatch_project"),
+
+  // Compiling.
+  detectToolchains: () => invoke<Toolchains>("detect_toolchains"),
+  setCompiler: (compiler: Compiler) => invoke<Settings>("set_compiler", { compiler }),
+  setEngine: (path: string, engine: Engine) => invoke<ProjectSummary>("set_engine", { path, engine }),
+  compileProject: (path: string) => invoke<CompileResult>("compile_project", { path }),
+  abortCompile: (path: string) => invoke<void>("abort_compile", { path }),
+  trustProject: (path: string) => invoke<void>("trust_project", { path }),
 };
 
 /** Rust errors arrive as plain strings; anything else gets a generic message. */

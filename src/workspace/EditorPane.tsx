@@ -3,6 +3,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AlertTriangle, FileQuestion, FolderOpen, Loader2 } from "lucide-react";
 import { monaco } from "../editor/monaco";
 import { Button } from "../components/Dialog";
+import { useCompile } from "./compileStore";
 import { getModel, useWorkspace } from "./store";
 
 /** Lets other panels (outline, search) move the editor's cursor. */
@@ -77,6 +78,7 @@ export function EditorPane() {
       const path = useWorkspace.getState().active;
       if (path) void useWorkspace.getState().save(path);
     });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void useCompile.getState().compile());
     editor.addAction({
       id: "texo.toggleWordWrap",
       label: "Toggle Word Wrap",

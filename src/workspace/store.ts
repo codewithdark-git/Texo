@@ -71,6 +71,13 @@ let unlisten: UnlistenFn | null = null;
 let symbolsTimer: ReturnType<typeof setTimeout> | undefined;
 let filesTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** Called after a file is saved or the project's files change (compile on save). */
+let afterChange: ((path: string) => void) | null = null;
+
+export function onProjectChanged(fn: ((path: string) => void) | null) {
+  afterChange = fn;
+}
+
 export function getModel(path: string): monaco.editor.ITextModel | undefined {
   return models.get(path);
 }
@@ -287,6 +294,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         savedVersion.set(path, version);
         setStatus(path, { dirty: isDirty(path), conflict: false });
         if (isSymbolSource(path)) scheduleSymbols();
+        afterChange?.(path);
       } catch (err) {
         fail(err);
       } finally {
@@ -365,6 +373,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         }
         await get().refreshFiles();
         get().expandTo(to);
+        afterChange?.(to);
       } catch (err) {
         fail(err);
         await get().refreshFiles().catch(() => {});
@@ -376,6 +385,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         dropTabs((p) => isWithin(p, path));
         await api.deletePath(projectPath(), path);
         await get().refreshFiles();
+        afterChange?.(path);
       } catch (err) {
         fail(err);
       }
@@ -384,6 +394,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     setMainDocument: async (path) => {
       try {
         set({ project: await api.setMainDocument(projectPath(), path) });
+        afterChange?.(path);
       } catch (err) {
         fail(err);
       }
@@ -396,6 +407,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         await get().refreshFiles();
         if (dest) get().expandTo(joinPath(dest, "x"));
         if (added.some(isSymbolSource)) scheduleSymbols();
+        added.forEach((p) => afterChange?.(p));
       } catch (err) {
         fail(err);
       }
