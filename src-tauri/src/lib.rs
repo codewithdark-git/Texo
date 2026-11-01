@@ -1,5 +1,6 @@
 mod commands;
 mod compile;
+mod engine;
 mod error;
 mod fsops;
 mod project;
@@ -83,6 +84,8 @@ pub fn run() {
             commands::synctex_forward,
             commands::synctex_inverse,
             commands::save_thumbnail,
+            commands::engine_status,
+            commands::prepare_engine,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Texo");

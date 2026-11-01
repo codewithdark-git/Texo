@@ -6,6 +6,7 @@ use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::compile::{self, CompileResult, Compiler, Toolchains};
+use crate::engine::{self, EngineStatus};
 use crate::error::{AppError, AppResult};
 use crate::fsops::{self, FileContent};
 use crate::project::{self, Engine, FileEntry, ProjectSummary};
@@ -474,4 +475,35 @@ pub async fn save_thumbnail(state: Shared<'_>, path: String, png_base64: String)
         .decode(png_base64.trim_start_matches("data:image/png;base64,"))
         .map_err(|_| AppError::msg("That isn't a PNG image."))?;
     project::save_thumbnail(&dir, &png)
+}
+
+/// Which LaTeX engine Texo will use, and whether it still needs its first-run setup.
+#[tauri::command]
+pub async fn engine_status(state: Shared<'_>) -> AppResult<EngineStatus> {
+    let (tools_dir, pref) = {
+        let s = lock(&state);
+        (s.tools_dir.clone(), s.settings.compiler)
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let tools = compile::detect(&tools_dir);
+        engine::status(&tools_dir, &tools, pref)
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))
+}
+
+/// Runs the bundled engine's first-time setup (fills its package cache),
+/// streaming progress as `engine-setup` events.
+#[tauri::command]
+pub async fn prepare_engine(app: AppHandle, state: Shared<'_>) -> AppResult<()> {
+    let tools_dir = lock(&state).tools_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tools = compile::detect(&tools_dir);
+        let emit = |lines: Vec<String>| {
+            let _ = app.emit(engine::EVENT, lines);
+        };
+        engine::prepare(&tools_dir, &tools, &emit)
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))?
 }
