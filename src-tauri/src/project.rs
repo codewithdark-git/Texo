@@ -54,6 +54,83 @@ pub struct ProjectSummary {
     pub file_count: usize,
     /// True when the folder lives outside the projects folder.
     pub external: bool,
+    /// First page of the last PDF, as a PNG data URL.
+    pub thumbnail: Option<String>,
+}
+
+const THUMBNAIL_FILE: &str = "thumbnail.png";
+const MAX_THUMBNAIL_BYTES: usize = 512 * 1024;
+
+fn read_thumbnail(dir: &Path) -> Option<String> {
+    use base64::Engine as _;
+    let path = dir.join(META_DIR).join(THUMBNAIL_FILE);
+    if is_link(&dir.join(META_DIR)) || is_link(&path) {
+        return None;
+    }
+    let bytes = fs::read(path).ok()?;
+    (bytes.len() <= MAX_THUMBNAIL_BYTES)
+        .then(|| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// Stores the dashboard thumbnail the UI rendered from the PDF.
+pub fn save_thumbnail(dir: &Path, png: &[u8]) -> AppResult<()> {
+    if png.len() > MAX_THUMBNAIL_BYTES || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(AppError::msg("That isn't a small PNG image."));
+    }
+    write_meta_file(dir, THUMBNAIL_FILE, png)
+}
+
+/// True for symbolic links and, on Windows, junctions.
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// `.texo/` (or a folder inside it) as a real folder in the project, created
+/// if needed. A project could ship these as links to somewhere else, which
+/// would make Texo's writes land outside the project, so links are refused.
+pub fn meta_subdir(dir: &Path, sub: Option<&str>) -> AppResult<PathBuf> {
+    let mut path = dir.join(META_DIR);
+    for part in std::iter::once(None).chain(sub.map(Some)) {
+        if let Some(part) = part {
+            path = path.join(part);
+        }
+        if is_link(&path) {
+            return Err(AppError::msg(format!(
+                "{} is a link to another location, so Texo won't write to it. Delete it and try again.",
+                path.display()
+            )));
+        }
+        fs::create_dir_all(&path)?;
+    }
+    Ok(path)
+}
+
+/// Writes a file in `.texo/` through a temporary file and a rename, which
+/// replaces a link at that path instead of writing through it.
+fn write_meta_file(dir: &Path, name: &str, bytes: &[u8]) -> AppResult<()> {
+    let meta = meta_subdir(dir, None)?;
+    let tmp = meta.join(format!(".{name}.tmp"));
+    if is_link(&tmp) {
+        fs::remove_file(&tmp)?;
+    }
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, meta.join(name))?;
+    Ok(())
+}
+
+/// Removes links inside a build folder before TeX writes there. Removing a
+/// link never touches the file it points to.
+pub fn remove_links(dir: &Path) -> AppResult<()> {
+    for entry in fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        if is_link(&path) {
+            // Directory links (junctions) need remove_dir; file links remove_file.
+            if fs::remove_file(&path).is_err() {
+                fs::remove_dir(&path)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,9 +152,7 @@ pub fn read_meta(dir: &Path) -> Option<ProjectMeta> {
 }
 
 fn write_meta(dir: &Path, meta: &ProjectMeta) -> AppResult<()> {
-    fs::create_dir_all(dir.join(META_DIR))?;
-    fs::write(meta_path(dir), serde_json::to_string_pretty(meta)?)?;
-    Ok(())
+    write_meta_file(dir, META_FILE, serde_json::to_string_pretty(meta)?.as_bytes())
 }
 
 fn new_meta(name: String, main_document: Option<String>) -> ProjectMeta {
@@ -176,6 +251,7 @@ pub fn summarize(dir: &Path, external: bool) -> Option<ProjectSummary> {
         last_edited,
         file_count,
         external,
+        thumbnail: read_thumbnail(dir),
     })
 }
 
@@ -454,6 +530,59 @@ mod tests {
         let kept = rename(&moved, "Elsewhere", false).unwrap();
         assert_eq!(kept, moved);
         assert_eq!(read_meta(&kept).unwrap().name, "Elsewhere");
+    }
+
+    /// Makes a Windows junction (a directory link that needs no admin rights).
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn never_writes_through_linked_metadata_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let dir = root.path().join("Paper");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.tex"), "\\documentclass{article}").unwrap();
+
+        // `.texo` itself is a link: metadata and thumbnails are refused.
+        junction(&dir.join(META_DIR), outside.path());
+        assert!(ensure_meta(&dir).is_err());
+        assert!(save_thumbnail(&dir, b"\x89PNG\r\n\x1a\nrest").is_err());
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0, "wrote outside the project");
+        fs::remove_dir(dir.join(META_DIR)).unwrap(); // removes the link only
+
+        // `.texo/build` is a link: the build folder is refused.
+        fs::create_dir_all(dir.join(META_DIR)).unwrap();
+        junction(&dir.join(META_DIR).join("build"), outside.path());
+        assert!(meta_subdir(&dir, Some("build")).is_err());
+        fs::remove_dir(dir.join(META_DIR).join("build")).unwrap();
+
+        // A link planted inside the build folder is removed; its target survives.
+        let build = meta_subdir(&dir, Some("build")).unwrap();
+        fs::write(outside.path().join("keep.txt"), "important").unwrap();
+        junction(&build.join("main.log"), outside.path());
+        remove_links(&build).unwrap();
+        assert!(!build.join("main.log").exists());
+        assert_eq!(fs::read_to_string(outside.path().join("keep.txt")).unwrap(), "important");
+
+        // Normal metadata writes still work and leave no temp files.
+        assert!(ensure_meta(&dir).is_ok());
+        assert!(save_thumbnail(&dir, b"\x89PNG\r\n\x1a\nrest").is_ok());
+        let names: Vec<String> = fs::read_dir(dir.join(META_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
     }
 
     #[test]

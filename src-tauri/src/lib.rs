@@ -5,6 +5,7 @@ mod fsops;
 mod project;
 mod settings;
 mod symbols;
+mod synctex;
 mod templates;
 mod texlog;
 mod watcher;
@@ -47,6 +48,7 @@ pub fn run() {
                 tools_dir,
             }));
             app.manage(compile::Running::default());
+            app.manage(commands::SyncCache::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,6 +79,10 @@ pub fn run() {
             commands::compile_project,
             commands::abort_compile,
             commands::trust_project,
+            commands::read_pdf,
+            commands::synctex_forward,
+            commands::synctex_inverse,
+            commands::save_thumbnail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Texo");

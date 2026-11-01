@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::compile::{self, CompileResult, Compiler, Toolchains};
@@ -9,6 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::fsops::{self, FileContent};
 use crate::project::{self, Engine, FileEntry, ProjectSummary};
 use crate::symbols::{self, Symbols};
+use crate::synctex::{ForwardResult, InverseResult, SyncTex};
 use crate::settings::Settings;
 use crate::templates::Template;
 use crate::{watcher, AppState};
@@ -377,4 +379,87 @@ pub async fn abort_compile(running: State<'_, compile::Running>, path: String) -
         flag.store(true, Ordering::SeqCst);
     }
     Ok(())
+}
+
+/// The compiled PDF's bytes, for the built-in viewer. Only PDFs in the
+/// project's build folder can be read.
+#[tauri::command]
+pub async fn read_pdf(state: Shared<'_>, path: String, pdf: String) -> AppResult<Response> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    let pdf = PathBuf::from(pdf);
+    let in_build = pdf.parent().is_some_and(|p| project::same_path(p, &compile::build_dir(&dir)));
+    let is_pdf = pdf.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+    if !in_build || !is_pdf {
+        return Err(AppError::msg("Only the project's compiled PDF can be opened."));
+    }
+    let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(pdf))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))??;
+    Ok(Response::new(bytes))
+}
+
+/// The parsed SyncTeX data of the last build, reused until the file changes.
+#[derive(Default)]
+pub struct SyncCache(Mutex<Option<(PathBuf, std::time::SystemTime, Arc<SyncTex>)>>);
+
+async fn synctex_for(state: &Shared<'_>, cache: &State<'_, SyncCache>, path: &str) -> AppResult<Option<Arc<SyncTex>>> {
+    let dir = known_project(&lock(state), path)?.0;
+    let meta = project::ensure_meta(&dir)?;
+    let Some(main) = meta.main_document else { return Ok(None) };
+    let main_path = dir.join(&main);
+    let main_dir = main_path.parent().unwrap_or(&dir).to_path_buf();
+    let stem = main_path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+    let file = compile::build_dir(&dir).join(format!("{stem}.synctex.gz"));
+    let Ok(modified) = std::fs::metadata(&file).and_then(|m| m.modified()) else { return Ok(None) };
+
+    if let Some((cached, at, st)) = cache.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if *cached == file && *at == modified {
+            return Ok(Some(st.clone()));
+        }
+    }
+    let load_file = file.clone();
+    let parsed = tauri::async_runtime::spawn_blocking(move || {
+        SyncTex::load(&load_file, |p| compile::project_relative(&dir, &main_dir, p))
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))??;
+    let parsed = Arc::new(parsed);
+    *cache.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((file, modified, parsed.clone()));
+    Ok(Some(parsed))
+}
+
+/// Source line → position in the PDF.
+#[tauri::command]
+pub async fn synctex_forward(
+    state: Shared<'_>,
+    cache: State<'_, SyncCache>,
+    path: String,
+    file: String,
+    line: u32,
+) -> AppResult<Option<ForwardResult>> {
+    Ok(synctex_for(&state, &cache, &path).await?.and_then(|st| st.forward(&file, line)))
+}
+
+/// Point in the PDF (points from the page's top-left) → source line.
+#[tauri::command]
+pub async fn synctex_inverse(
+    state: Shared<'_>,
+    cache: State<'_, SyncCache>,
+    path: String,
+    page: usize,
+    x: f64,
+    y: f64,
+) -> AppResult<Option<InverseResult>> {
+    Ok(synctex_for(&state, &cache, &path).await?.and_then(|st| st.inverse(page, x, y)))
+}
+
+/// Saves the dashboard thumbnail (a PNG the viewer rendered from page 1).
+#[tauri::command]
+pub async fn save_thumbnail(state: Shared<'_>, path: String, png_base64: String) -> AppResult<()> {
+    use base64::Engine as _;
+    let dir = known_project(&lock(&state), &path)?.0;
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(png_base64.trim_start_matches("data:image/png;base64,"))
+        .map_err(|_| AppError::msg("That isn't a PNG image."))?;
+    project::save_thumbnail(&dir, &png)
 }

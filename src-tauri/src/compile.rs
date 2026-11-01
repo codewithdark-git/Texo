@@ -28,6 +28,11 @@ use crate::texlog::{self, Issue};
 
 pub const OUTPUT_EVENT: &str = "compile-output";
 const BUILD_DIR: &str = "build";
+
+/// The folder build output goes to.
+pub fn build_dir(root: &Path) -> PathBuf {
+    root.join(META_DIR).join(BUILD_DIR)
+}
 const TIMEOUT: Duration = Duration::from_secs(240);
 const MAX_LOG_BYTES: usize = 2 * 1024 * 1024;
 
@@ -478,11 +483,17 @@ pub fn compile(job: &Job) -> CompileResult {
     result.rc_ignored = !job.trusted
         && job.compiler == Compiler::Latexmk
         && PROJECT_RC_NAMES.iter().any(|n| main_dir.join(n).is_file());
-    let build = job.root.join(META_DIR).join(BUILD_DIR);
-    if let Err(e) = std::fs::create_dir_all(&build) {
-        result.output = format!("Couldn't create the build folder: {e}");
-        return result;
-    }
+    // A real folder inside the project, with no planted links for TeX to
+    // write through.
+    let build = match crate::project::meta_subdir(job.root, Some(BUILD_DIR))
+        .and_then(|b| crate::project::remove_links(&b).map(|()| b))
+    {
+        Ok(b) => b,
+        Err(e) => {
+            result.output = format!("Couldn't prepare the build folder: {e}");
+            return result;
+        }
+    };
     let build_str = build.to_string_lossy().into_owned();
     let mut common = vec![
         "-interaction=nonstopmode".to_string(),
@@ -736,6 +747,21 @@ mod tests {
             assert!(dir.join(".texo/build/main.synctex.gz").is_file(), "{compiler:?}: no synctex");
             // The citation resolved, so BibTeX ran and the reruns happened.
             assert!(!result.issues.iter().any(|i| i.message.contains("undefined")), "{compiler:?}: {:?}", result.issues);
+
+            // SyncTeX round trip: the Method heading sits at the 1in margin,
+            // and clicking its box leads back to its line.
+            let source = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+            let heading = source.lines().position(|l| l.starts_with("\\section{Method}")).unwrap() as u32 + 1;
+            let st = crate::synctex::SyncTex::load(&dir.join(".texo/build/main.synctex.gz"), |p| {
+                project_relative(&dir, &dir, p)
+            })
+            .unwrap();
+            let fwd = st.forward("main.tex", heading).expect("forward search");
+            assert_eq!(fwd.page, 1);
+            let r = &fwd.rects[0];
+            assert!((r.x - 72.0).abs() < 1.0, "{compiler:?}: heading x = {}", r.x);
+            let back = st.inverse(fwd.page, r.x + 5.0, r.y + r.height / 2.0).expect("inverse search");
+            assert_eq!((back.file.as_str(), back.line), ("main.tex", heading), "{compiler:?}");
 
             // A broken document fails with an error on the right line.
             std::fs::write(
