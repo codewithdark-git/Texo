@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Texo",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "identifier": "app.texo.desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "node scripts/fetch-tectonic.mjs && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node scripts/fetch-tectonic.mjs && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -27,6 +27,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "externalBin": ["binaries/tectonic"],
+    "category": "Productivity",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,6 +1,8 @@
 node_modules/
 dist/
 src-tauri/target/
+# Downloaded by scripts/fetch-tectonic.mjs
+src-tauri/binaries/
 src-tauri/gen/schemas/
 *.log
 .remember/
