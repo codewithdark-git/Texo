@@ -340,6 +340,12 @@ pub fn set_main_document(dir: &Path, file: &str) -> AppResult<()> {
     write_meta(dir, &meta)
 }
 
+pub fn set_engine(dir: &Path, engine: Engine) -> AppResult<()> {
+    let mut meta = ensure_meta(dir)?;
+    meta.engine = engine;
+    write_meta(dir, &meta)
+}
+
 /// Moves the project folder to the Recycle Bin, so it can be recovered.
 pub fn delete(dir: &Path) -> AppResult<()> {
     trash::delete(dir)?;

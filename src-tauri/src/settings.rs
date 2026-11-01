@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::compile::Compiler;
 use crate::error::AppResult;
 
 /// App-wide settings, stored as JSON in the app config directory.
@@ -13,6 +14,12 @@ pub struct Settings {
     /// Project folders opened from outside `projects_root`.
     #[serde(default)]
     pub external_projects: Vec<PathBuf>,
+    /// Which TeX toolchain compiles projects.
+    #[serde(default)]
+    pub compiler: Compiler,
+    /// Projects allowed to run their own latexmk config (Perl code).
+    #[serde(default)]
+    pub trusted_projects: Vec<PathBuf>,
 }
 
 impl Settings {
@@ -25,6 +32,8 @@ impl Settings {
             .unwrap_or(Settings {
                 projects_root: default_root,
                 external_projects: Vec::new(),
+                compiler: Compiler::default(),
+                trusted_projects: Vec::new(),
             })
     }
 
