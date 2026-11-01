@@ -2,7 +2,7 @@
 
 A desktop AI LaTeX editor for Windows. Projects are plain folders on your disk, compiling works offline, and the AI assistant uses your own provider key.
 
-> Early development. The dashboard and the editor work; compiling and the PDF preview come next. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> Early development. The dashboard, editor, and compiler work; the built-in PDF preview comes next. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## What works now
 
@@ -17,7 +17,12 @@ A desktop AI LaTeX editor for Windows. Projects are plain folders on your disk, 
 - **File tree**: new file or folder, rename or move, set the main document, show in File Explorer, move to the Recycle Bin. Drop files from File Explorer onto a folder to copy them in.
 - **Tabs**, an **outline** of the open file, image previews, and a status bar.
 - Edits made in other apps show up right away. If a file changes on disk while you have unsaved edits, Texo asks which version to keep.
-- Shortcuts: Ctrl+S save, Ctrl+B bold, Ctrl+I italic, Alt+Z word wrap, F2 rename in the file tree.
+- **Compiling** with the TeX already on your PC (MiKTeX or TeX Live): pdfLaTeX, XeLaTeX, or LuaLaTeX, run through latexmk, or directly when Perl isn't available. BibTeX and Biber run automatically, and a project's `.latexmkrc` is respected. Tectonic is used if it's installed. Build files go to `.texo/build/`.
+- Compiles automatically after each save (can be turned off), or press Compile / Ctrl+Enter. A running compile can be stopped, and stops on its own after 4 minutes.
+- **Issues panel**: errors, warnings, and layout warnings parsed from the TeX, BibTeX, and Biber logs, with filters, TeX's error context, plain-language hints for common problems, and click-to-jump to the line. Errors and warnings also show as squiggles in the editor.
+- The console output streams live in the Log tab, and the full TeX log is one click away.
+- **Project trust**: a `latexmkrc` file is Perl code, so it only runs for projects you create in Texo or choose to trust. Folders opened from disk compile with it skipped until you click "Trust this project". Shell escape is always off.
+- Shortcuts: Ctrl+S save, Ctrl+Enter compile, Ctrl+B bold, Ctrl+I italic, Alt+Z word wrap, F2 rename in the file tree.
 
 ## How a project is stored
 
@@ -53,6 +58,12 @@ pnpm typecheck && pnpm test
 cd src-tauri && cargo test
 ```
 
+With MiKTeX or TeX Live installed, this also compiles a real document through latexmk and the engine directly:
+
+```bash
+cd src-tauri && cargo test -- --ignored
+```
+
 Build an installer (unsigned) into `src-tauri/target/release/bundle/nsis/`:
 
 ```bash
@@ -69,6 +80,8 @@ pnpm tauri build
 | `src-tauri/src/fsops.rs` | File reads and writes, confined to the project folder |
 | `src-tauri/src/watcher.rs` | Tells the UI when files change on disk |
 | `src-tauri/src/symbols.rs` | Finds labels, citation keys, and custom commands for completions |
+| `src-tauri/src/compile.rs` | Finds TeX tools and runs latexmk, the engine, or Tectonic |
+| `src-tauri/src/texlog.rs` | Turns TeX/BibTeX/Biber logs into issues |
 | `src-tauri/src/commands.rs` | Tauri commands the UI calls |
 | `src/workspace/` | The editor workspace: file tree, tabs, outline, autosave |
 | `src/editor/` | Monaco setup, LaTeX/BibTeX grammars, themes, completions |
