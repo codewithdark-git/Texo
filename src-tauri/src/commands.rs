@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
+use crate::compile::{self, CompileResult, Compiler, Toolchains};
 use crate::error::{AppError, AppResult};
 use crate::fsops::{self, FileContent};
-use crate::project::{self, FileEntry, ProjectSummary};
+use crate::project::{self, Engine, FileEntry, ProjectSummary};
 use crate::symbols::{self, Symbols};
 use crate::settings::Settings;
 use crate::templates::Template;
@@ -63,9 +65,12 @@ pub async fn create_project(
     name: String,
     template: Template,
 ) -> AppResult<ProjectSummary> {
-    let s = lock(&state);
+    let mut s = lock(&state);
     std::fs::create_dir_all(&s.settings.projects_root)?;
-    project::create(&s.settings.projects_root, &name, template)
+    let created = project::create(&s.settings.projects_root, &name, template)?;
+    s.settings.trusted_projects.push(PathBuf::from(&created.path));
+    s.settings.save(&s.settings_path)?;
+    Ok(created)
 }
 
 /// Opens any folder as a project. Folders outside the projects folder are
@@ -246,5 +251,130 @@ pub async fn watch_project(app: AppHandle, state: Shared<'_>, path: String) -> A
 #[tauri::command]
 pub async fn unwatch_project(state: Shared<'_>) -> AppResult<()> {
     lock(&state).watcher = None;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn detect_toolchains(state: Shared<'_>) -> AppResult<Toolchains> {
+    let tools_dir = lock(&state).tools_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || compile::detect(&tools_dir))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn set_compiler(state: Shared<'_>, compiler: Compiler) -> AppResult<Settings> {
+    let mut s = lock(&state);
+    s.settings.compiler = compiler;
+    s.settings.save(&s.settings_path)?;
+    Ok(s.settings.clone())
+}
+
+#[tauri::command]
+pub async fn set_engine(state: Shared<'_>, path: String, engine: Engine) -> AppResult<ProjectSummary> {
+    let s = lock(&state);
+    let (dir, external) = known_project(&s, &path)?;
+    project::set_engine(&dir, engine)?;
+    project::summarize(&dir, external).ok_or_else(|| AppError::msg("Couldn't read that project."))
+}
+
+/// Compiles the project's main document. Console output streams to the UI as
+/// `compile-output` events while it runs.
+#[tauri::command]
+pub async fn compile_project(
+    app: AppHandle,
+    state: Shared<'_>,
+    running: State<'_, compile::Running>,
+    path: String,
+) -> AppResult<CompileResult> {
+    let (dir, pref, tools_dir, trusted) = {
+        let s = lock(&state);
+        let dir = known_project(&s, &path)?.0;
+        let trusted = is_trusted(&s, &dir);
+        (dir, s.settings.compiler, s.tools_dir.clone(), trusted)
+    };
+    let meta = project::ensure_meta(&dir)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut map = running.0.lock().unwrap_or_else(|e| e.into_inner());
+        // A newer compile replaces an older one for the same project.
+        if let Some(old) = map.insert(path.clone(), cancel.clone()) {
+            old.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let project = path.clone();
+    let worker_cancel = cancel.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let tools = compile::detect(&tools_dir);
+        let Some(main) = meta.main_document.clone() else {
+            return no_run(compile::Status::NoMainDocument, meta.engine);
+        };
+        let Some(compiler) = tools.choose(pref, meta.engine) else {
+            return no_run(compile::Status::NoEngine, meta.engine);
+        };
+        let emit = |lines: Vec<String>| {
+            let _ = app.emit(
+                compile::OUTPUT_EVENT,
+                compile::OutputChunk { project: project.clone(), lines },
+            );
+        };
+        compile::compile(&compile::Job {
+            root: &dir,
+            main: &main,
+            engine: meta.engine,
+            compiler,
+            tools: &tools,
+            cancel: worker_cancel,
+            trusted,
+            on_output: &emit,
+        })
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))?;
+
+    let mut map = running.0.lock().unwrap_or_else(|e| e.into_inner());
+    if map.get(&path).is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
+        map.remove(&path);
+    }
+    Ok(result)
+}
+
+fn no_run(status: compile::Status, engine: Engine) -> CompileResult {
+    CompileResult {
+        status,
+        compiler: None,
+        engine,
+        pdf_path: None,
+        duration_ms: 0,
+        issues: Vec::new(),
+        hints: Vec::new(),
+        log: String::new(),
+        output: String::new(),
+        rc_ignored: false,
+    }
+}
+
+fn is_trusted(s: &AppState, dir: &Path) -> bool {
+    s.settings.trusted_projects.iter().any(|p| project::same_path(p, dir))
+}
+
+/// Lets a project run its own latexmk config from now on.
+#[tauri::command]
+pub async fn trust_project(state: Shared<'_>, path: String) -> AppResult<()> {
+    let mut s = lock(&state);
+    let dir = known_project(&s, &path)?.0;
+    if !is_trusted(&s, &dir) {
+        s.settings.trusted_projects.push(dir);
+        s.settings.save(&s.settings_path)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn abort_compile(running: State<'_, compile::Running>, path: String) -> AppResult<()> {
+    if let Some(flag) = running.0.lock().unwrap_or_else(|e| e.into_inner()).get(&path) {
+        flag.store(true, Ordering::SeqCst);
+    }
     Ok(())
 }
