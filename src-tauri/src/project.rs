@@ -500,9 +500,13 @@ pub fn list_files(dir: &Path) -> Vec<FileEntry> {
 /// trailing separator and the separator style.
 pub fn same_path(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| {
-        to_slash(p)
-            .trim_end_matches('/')
-            .to_lowercase()
+        let s = to_slash(p).trim_end_matches('/').to_string();
+        // Windows paths are case-insensitive; Linux paths are not.
+        if cfg!(windows) {
+            s.to_lowercase()
+        } else {
+            s
+        }
     };
     norm(a) == norm(b)
 }
@@ -695,6 +699,7 @@ mod tests {
         assert_eq!(files, vec!["main.tex", "sections", "sections/intro.tex"]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn compares_paths_like_windows() {
         assert!(same_path(Path::new("C:\\Users\\A\\Texo\\"), Path::new("c:/users/a/texo")));

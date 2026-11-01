@@ -247,6 +247,7 @@ mod tests {
         assert!(resolve(root, "sections\\intro.tex").is_ok());
         assert!(resolve(root, "../secret.txt").is_err());
         assert!(resolve(root, "a/../../b").is_err());
+        #[cfg(windows)]
         assert!(resolve(root, "C:\\Windows\\win.ini").is_err());
         assert!(resolve(root, "/etc/passwd").is_ok_and(|p| p.starts_with(root)));
         assert!(resolve(root, ".texo/project.json").is_err());

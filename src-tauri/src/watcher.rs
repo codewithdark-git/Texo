@@ -77,6 +77,7 @@ pub fn watch(app: AppHandle, root: PathBuf) -> AppResult<ProjectWatcher> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn filters_metadata_and_temp_files() {
         let root = Path::new("C:\\p");
