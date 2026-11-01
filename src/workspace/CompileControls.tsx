@@ -14,7 +14,7 @@ const COMPILER_NAMES: Record<Compiler, string> = {
   auto: "Automatic",
   latexmk: "latexmk",
   direct: "Engine directly",
-  tectonic: "Tectonic",
+  tectonic: "Tectonic (built-in)",
 };
 
 /** The Compile button, its stop state, and the engine/compiler menu. */

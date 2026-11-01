@@ -5,6 +5,7 @@ import { monaco } from "../editor/monaco";
 import { Button } from "../components/Dialog";
 import { useCompile } from "./compileStore";
 import { syncToPdf } from "./PdfViewer";
+import { nativePath } from "./paths";
 import { getModel, useWorkspace } from "./store";
 
 /** Lets other panels (outline, search) move the editor's cursor. */
@@ -183,7 +184,7 @@ export function EditorPane() {
                   : "It isn't a text file. It stays in the project and is used when compiling."}
               </p>
               {project && active && (
-                <Button onClick={() => void revealItemInDir(`${project.path}\\${active.replaceAll("/", "\\")}`)}>
+                <Button onClick={() => void revealItemInDir(nativePath(project.path, active))}>
                   <FolderOpen size={15} /> Show in File Explorer
                 </Button>
               )}

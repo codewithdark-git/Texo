@@ -1,4 +1,4 @@
-import { FolderCog, Library } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FolderCog, Library, Loader2, RefreshCw } from "lucide-react";
 import { useApp } from "../store";
 
 export function Logo({ size = 28 }: { size?: number }) {
@@ -9,6 +9,52 @@ export function Logo({ size = 28 }: { size?: number }) {
       <path d="M512 330 V720" stroke="#fff" strokeWidth="104" strokeLinecap="round" />
       <path d="M400 640 C460 600 564 600 624 640" stroke="#8b98ff" strokeWidth="36" strokeLinecap="round" fill="none" />
     </svg>
+  );
+}
+
+/** Which LaTeX engine compiles, and the built-in engine's first-run setup. */
+function EngineBlock() {
+  const engine = useApp((s) => s.engine);
+  const setup = useApp((s) => s.engineSetup);
+  const retry = useApp((s) => s.checkEngine);
+  if (!engine) return <div className="mt-auto" />;
+
+  const name = engine.bundled
+    ? "Built-in engine (Tectonic)"
+    : engine.compiler === "tectonic"
+      ? "Tectonic"
+      : engine.distribution ?? "No LaTeX found";
+
+  return (
+    <div className="mt-auto border-t border-border px-4 py-3 text-xs">
+      <div className="mb-1 text-muted">LaTeX engine</div>
+      <div className="flex items-center gap-1.5">
+        {setup.running ? (
+          <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
+        ) : setup.error || !engine.compiler ? (
+          <AlertTriangle size={13} className="shrink-0 text-amber-400" />
+        ) : (
+          <CheckCircle2 size={13} className="shrink-0 text-emerald-400" />
+        )}
+        <span className="truncate">{name}</span>
+      </div>
+      {setup.running && (
+        <div className="mt-1.5 text-muted">
+          <p>Setting up for first use. This downloads LaTeX packages once (about 90 MB).</p>
+          <p className="mt-1 truncate font-mono text-[10px]" title={setup.line}>
+            {setup.line}
+          </p>
+        </div>
+      )}
+      {setup.error && (
+        <div className="mt-1.5 text-muted">
+          <p>{setup.error}</p>
+          <button type="button" onClick={() => void retry()} className="mt-1 inline-flex items-center gap-1 text-accent hover:underline">
+            <RefreshCw size={12} /> Try again
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -31,7 +77,9 @@ export function Sidebar({ onChangeRoot }: { onChangeRoot: () => void }) {
         </div>
       </nav>
 
-      <div className="mt-auto border-t border-border px-4 py-3">
+      <EngineBlock />
+
+      <div className="border-t border-border px-4 py-3">
         <div className="mb-1 text-xs text-muted">Projects folder</div>
         <div className="truncate font-mono text-xs" title={settings?.projectsRoot}>
           {settings?.projectsRoot ?? "…"}

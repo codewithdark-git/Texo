@@ -12,6 +12,13 @@ export function parentDir(path: string): string {
   return i === -1 ? "" : path.slice(0, i);
 }
 
+/** A project file's full path on disk, with the platform's separators. */
+export function nativePath(projectRoot: string, rel: string): string {
+  if (!rel) return projectRoot;
+  const sep = projectRoot.includes("\\") ? "\\" : "/";
+  return `${projectRoot}${sep}${sep === "/" ? rel : rel.replaceAll("/", sep)}`;
+}
+
 export function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }

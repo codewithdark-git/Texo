@@ -81,7 +81,21 @@ export interface Toolchains {
   kpsewhich: string | null;
   tectonic: string | null;
   distribution: string | null;
+  /** The Tectonic that ships with Texo is the one in use. */
+  tectonicBundled: boolean;
 }
+
+export interface EngineStatus {
+  /** The toolchain "Automatic" compiles with, or null if there is none. */
+  compiler: Compiler | null;
+  distribution: string | null;
+  bundled: boolean;
+  /** Ready to compile without a long first-time download. */
+  ready: boolean;
+}
+
+/** Payload of `engine-setup` events: console lines from the first-run setup. */
+export const ENGINE_SETUP_EVENT = "engine-setup";
 
 export type Severity = "error" | "warning" | "badbox";
 
@@ -162,6 +176,8 @@ export const api = {
   abortCompile: (path: string) => invoke<void>("abort_compile", { path }),
   trustProject: (path: string) => invoke<void>("trust_project", { path }),
   saveThumbnail: (path: string, pngBase64: string) => invoke<void>("save_thumbnail", { path, pngBase64 }),
+  engineStatus: () => invoke<EngineStatus>("engine_status"),
+  prepareEngine: () => invoke<void>("prepare_engine"),
 };
 
 /** Rust errors arrive as plain strings; anything else gets a generic message. */

@@ -1,5 +1,14 @@
 import { create } from "zustand";
-import { api, errorText, type ProjectSummary, type Settings, type Template } from "./lib/api";
+import { listen } from "@tauri-apps/api/event";
+import {
+  api,
+  ENGINE_SETUP_EVENT,
+  errorText,
+  type EngineStatus,
+  type ProjectSummary,
+  type Settings,
+  type Template,
+} from "./lib/api";
 import type { SortDir, SortKey } from "./lib/projects";
 
 export type ViewMode = "list" | "grid";
@@ -36,6 +45,9 @@ interface AppStore extends Prefs {
   error: string | null;
   query: string;
   openProject: ProjectSummary | null;
+  engine: EngineStatus | null;
+  /** First-run engine setup: running, with its latest progress line. */
+  engineSetup: { running: boolean; line: string; error: string | null };
 
   load: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -52,6 +64,7 @@ interface AppStore extends Prefs {
   remove: (project: ProjectSummary) => Promise<void>;
   forget: (project: ProjectSummary) => Promise<void>;
   setProjectsRoot: (path: string) => Promise<void>;
+  checkEngine: () => Promise<void>;
 }
 
 export const useApp = create<AppStore>((set, get) => {
@@ -81,12 +94,44 @@ export const useApp = create<AppStore>((set, get) => {
     error: null,
     query: "",
     openProject: null,
+    engine: null,
+    engineSetup: { running: false, line: "", error: null },
+
+    checkEngine: async () => {
+      try {
+        const engine = await api.engineStatus();
+        set({ engine });
+        if (engine.ready || get().engineSetup.running) return;
+        // First run with the built-in engine: download the common LaTeX
+        // packages now, so the first real compile is quick.
+        set({ engineSetup: { running: true, line: "Starting…", error: null } });
+        const unlisten = await listen<string[]>(ENGINE_SETUP_EVENT, (e) => {
+          // Tectonic prints a harmless fontconfig complaint on Windows; skip it.
+          const line = e.payload
+            .map((l) => l.trim().replace(/^note:\s*/, ""))
+            .filter((l) => l && !l.startsWith("Fontconfig") && !l.startsWith("$ "))
+            .pop();
+          if (line) set((s) => ({ engineSetup: { ...s.engineSetup, line } }));
+        });
+        try {
+          await api.prepareEngine();
+          set({ engine: { ...engine, ready: true }, engineSetup: { running: false, line: "", error: null } });
+        } catch (err) {
+          set({ engineSetup: { running: false, line: "", error: errorText(err) } });
+        } finally {
+          unlisten();
+        }
+      } catch {
+        // Status is informational; compiling reports its own problems.
+      }
+    },
 
     load: async () => {
       try {
         const settings = await api.getSettings();
         set({ settings });
         await get().refresh();
+        void get().checkEngine();
       } catch (err) {
         set({ error: errorText(err) });
       } finally {

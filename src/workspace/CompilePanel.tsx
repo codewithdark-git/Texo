@@ -239,8 +239,8 @@ function NoEngine() {
       <AlertTriangle size={28} className="text-amber-400" />
       <p className="font-medium">No LaTeX installation found</p>
       <p className="max-w-sm text-sm text-muted">
-        Texo compiles with MiKTeX or TeX Live. Install MiKTeX (free), then check again. A built-in engine is planned
-        for a later version.
+        Texo's built-in engine is missing, and no MiKTeX or TeX Live was found. Reinstall Texo to restore the built-in
+        engine, or install MiKTeX, then check again.
       </p>
       <div className="flex gap-2">
         <Button variant="primary" onClick={() => void openUrl("https://miktex.org/download")}>

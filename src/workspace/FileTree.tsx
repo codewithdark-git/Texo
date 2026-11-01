@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { ConfirmDialog, PromptDialog } from "../components/Dialog";
 import { ContextMenu, type MenuItem } from "../components/Menu";
-import { baseName, buildTree, joinPath, parentDir, type TreeNode } from "./paths";
+import { baseName, buildTree, joinPath, nativePath, parentDir, type TreeNode } from "./paths";
 import { useWorkspace } from "./store";
 
 type Dialog =
@@ -52,7 +52,7 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
   };
 
   const reveal = (path: string) =>
-    void revealItemInDir(path ? `${ws.project!.path}\\${path.replaceAll("/", "\\")}` : ws.project!.path);
+    void revealItemInDir(nativePath(ws.project!.path, path));
 
   const menuItems = (node: TreeNode | null): (MenuItem | "divider")[] => {
     const dir = node ? (node.isDir ? node.path : parentDir(node.path)) : "";
@@ -70,7 +70,7 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
       items.push({
         label: "Open in PDF app",
         icon: <ExternalLink size={15} />,
-        onSelect: () => void openPath(`${ws.project!.path}\\${node.path.replaceAll("/", "\\")}`),
+        onSelect: () => void openPath(nativePath(ws.project!.path, node.path)),
       });
     }
     items.push(
