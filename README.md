@@ -2,7 +2,7 @@
 
 A desktop AI LaTeX editor for Windows. Projects are plain folders on your disk, compiling works offline, and the AI assistant uses your own provider key.
 
-> Early development. The dashboard, editor, and compiler work; the built-in PDF preview comes next. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> Early development. The dashboard, editor, compiler, and PDF preview work; the AI assistant comes next. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## What works now
 
@@ -21,8 +21,11 @@ A desktop AI LaTeX editor for Windows. Projects are plain folders on your disk, 
 - Compiles automatically after each save (can be turned off), or press Compile / Ctrl+Enter. A running compile can be stopped, and stops on its own after 4 minutes.
 - **Issues panel**: errors, warnings, and layout warnings parsed from the TeX, BibTeX, and Biber logs, with filters, TeX's error context, plain-language hints for common problems, and click-to-jump to the line. Errors and warnings also show as squiggles in the editor.
 - The console output streams live in the Log tab, and the full TeX log is one click away.
+- **PDF preview** (pdf.js) next to the editor: fit width or page, zoom (also Ctrl+mouse wheel), page jump, find in PDF (Ctrl+F), a dark mode for the page, selectable text, clickable links, and "open in your PDF app". It keeps your zoom and scroll position when the PDF updates.
+- **SyncTeX**: double-click anywhere in the PDF to jump to that source line, or press Ctrl+Alt+J (or the crosshair button) to highlight the cursor's position in the PDF.
+- The dashboard grid shows each project's first page.
 - **Project trust**: a `latexmkrc` file is Perl code, so it only runs for projects you create in Texo or choose to trust. Folders opened from disk compile with it skipped until you click "Trust this project". Shell escape is always off.
-- Shortcuts: Ctrl+S save, Ctrl+Enter compile, Ctrl+B bold, Ctrl+I italic, Alt+Z word wrap, F2 rename in the file tree.
+- Shortcuts: Ctrl+S save, Ctrl+Enter compile, Ctrl+Alt+J show in PDF, Ctrl+B bold, Ctrl+I italic, Alt+Z word wrap, F2 rename in the file tree.
 
 ## How a project is stored
 
@@ -82,6 +85,7 @@ pnpm tauri build
 | `src-tauri/src/symbols.rs` | Finds labels, citation keys, and custom commands for completions |
 | `src-tauri/src/compile.rs` | Finds TeX tools and runs latexmk, the engine, or Tectonic |
 | `src-tauri/src/texlog.rs` | Turns TeX/BibTeX/Biber logs into issues |
+| `src-tauri/src/synctex.rs` | Reads `.synctex.gz` for jumps between source and PDF |
 | `src-tauri/src/commands.rs` | Tauri commands the UI calls |
 | `src/workspace/` | The editor workspace: file tree, tabs, outline, autosave |
 | `src/editor/` | Monaco setup, LaTeX/BibTeX grammars, themes, completions |

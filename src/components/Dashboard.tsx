@@ -320,14 +320,18 @@ function ProjectGrid({ projects, actionsFor }: { projects: ProjectSummary[]; act
             aria-label={`Open ${p.name}`}
             className="flex aspect-[4/3] w-full items-center justify-center rounded-t-xl bg-surface-2"
           >
-            {/* Page thumbnails arrive with the PDF viewer (week 4). */}
-            <span className="flex h-3/4 aspect-[1/1.3] flex-col gap-1.5 rounded-sm bg-white/90 p-3 shadow">
-              <span className="h-1.5 w-3/4 self-center rounded bg-black/30" />
-              <span className="h-1 w-full rounded bg-black/15" />
-              <span className="h-1 w-full rounded bg-black/15" />
-              <span className="h-1 w-5/6 rounded bg-black/15" />
-              <span className="h-1 w-full rounded bg-black/15" />
-            </span>
+            {p.thumbnail ? (
+              <img src={p.thumbnail} alt="" className="h-[85%] rounded-sm bg-white object-contain shadow" />
+            ) : (
+              // Until the project's first successful compile.
+              <span className="flex h-3/4 aspect-[1/1.3] flex-col gap-1.5 rounded-sm bg-white/90 p-3 shadow">
+                <span className="h-1.5 w-3/4 self-center rounded bg-black/30" />
+                <span className="h-1 w-full rounded bg-black/15" />
+                <span className="h-1 w-full rounded bg-black/15" />
+                <span className="h-1 w-5/6 rounded bg-black/15" />
+                <span className="h-1 w-full rounded bg-black/15" />
+              </span>
+            )}
           </button>
           <div className="flex items-center gap-2 px-3 py-2.5">
             <div className="min-w-0 flex-1">

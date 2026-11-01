@@ -4,10 +4,20 @@ import { AlertTriangle, FileQuestion, FolderOpen, Loader2 } from "lucide-react";
 import { monaco } from "../editor/monaco";
 import { Button } from "../components/Dialog";
 import { useCompile } from "./compileStore";
+import { syncToPdf } from "./PdfViewer";
 import { getModel, useWorkspace } from "./store";
 
 /** Lets other panels (outline, search) move the editor's cursor. */
 export const editorBridge: { editor: monaco.editor.IStandaloneCodeEditor | null } = { editor: null };
+
+/** Opens a project file and moves the cursor to a line. */
+export async function revealSource(file: string, line: number) {
+  const ws = useWorkspace.getState();
+  ws.expandTo(file);
+  await ws.openFile(file);
+  // Let the editor switch models before moving the cursor.
+  setTimeout(() => revealLine(line), 30);
+}
 
 export function revealLine(line: number) {
   const ed = editorBridge.editor;
@@ -79,6 +89,17 @@ export function EditorPane() {
       if (path) void useWorkspace.getState().save(path);
     });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void useCompile.getState().compile());
+    editor.addAction({
+      id: "texo.syncToPdf",
+      label: "Show Position in PDF",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyJ],
+      contextMenuGroupId: "navigation",
+      run: (ed) => {
+        const path = useWorkspace.getState().active;
+        const pos = ed.getPosition();
+        if (path && pos) void syncToPdf(path, pos.lineNumber).catch(() => {});
+      },
+    });
     editor.addAction({
       id: "texo.toggleWordWrap",
       label: "Toggle Word Wrap",

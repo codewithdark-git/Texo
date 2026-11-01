@@ -13,6 +13,7 @@ function project(name: string, lastEdited: string, createdAt = lastEdited): Proj
     lastEdited,
     fileCount: 1,
     external: false,
+    thumbnail: null,
   };
 }
 

@@ -22,6 +22,8 @@ export interface ProjectSummary {
   lastEdited: string;
   fileCount: number;
   external: boolean;
+  /** First page of the last PDF, as a PNG data URL. */
+  thumbnail: string | null;
 }
 
 export interface FileEntry {
@@ -152,6 +154,7 @@ export const api = {
   compileProject: (path: string) => invoke<CompileResult>("compile_project", { path }),
   abortCompile: (path: string) => invoke<void>("abort_compile", { path }),
   trustProject: (path: string) => invoke<void>("trust_project", { path }),
+  saveThumbnail: (path: string, pngBase64: string) => invoke<void>("save_thumbnail", { path, pngBase64 }),
 };
 
 /** Rust errors arrive as plain strings; anything else gets a generic message. */

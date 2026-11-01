@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
-import { AlertCircle, AlertTriangle, ExternalLink, FileText, Info, Lightbulb, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { AlertCircle, AlertTriangle, ExternalLink, Info, Lightbulb, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import type { Issue, Severity } from "../lib/api";
 import { Button } from "../components/Dialog";
 import { useCompile } from "./compileStore";
-import { revealLine } from "./EditorPane";
+import { revealSource } from "./EditorPane";
 import { ENGINE_NAMES } from "./CompileControls";
+import { PdfViewer } from "./PdfViewer";
 import { useWorkspace } from "./store";
 
-type Tab = "issues" | "log";
+type Tab = "pdf" | "issues" | "log";
 type Filter = "all" | "error" | "warning" | "badbox";
 
 const ICONS: Record<Severity, { icon: typeof AlertCircle; className: string }> = {
@@ -22,19 +23,14 @@ function formatDuration(ms: number): string {
 }
 
 async function goTo(issue: Issue) {
-  if (!issue.file) return;
-  const ws = useWorkspace.getState();
-  ws.expandTo(issue.file);
-  await ws.openFile(issue.file);
-  // Let the editor switch models before moving the cursor.
-  if (issue.line) setTimeout(() => revealLine(issue.line!), 30);
+  if (issue.file) await revealSource(issue.file, issue.line ?? 1);
 }
 
-/** Right-hand pane until the PDF viewer lands: compile status, issues, and logs. */
+/** The right-hand pane: the PDF, the compile issues, and the logs. */
 export function CompilePanel() {
   const c = useCompile();
   const engine = useWorkspace((s) => s.project?.engine ?? "pdflatex");
-  const [tab, setTab] = useState<Tab>("issues");
+  const [tab, setTab] = useState<Tab>("pdf");
   const [filter, setFilter] = useState<Filter>("all");
   const [showTexLog, setShowTexLog] = useState(false);
   const logEnd = useRef<HTMLDivElement>(null);
@@ -50,6 +46,15 @@ export function CompilePanel() {
   );
   const shown = filter === "all" ? issues : issues.filter((i) => i.severity === filter);
 
+  // Show the issues when a compile produced no PDF, and the PDF again once it works.
+  const lastResult = useRef(c.result);
+  useEffect(() => {
+    if (!c.result || c.result === lastResult.current) return;
+    lastResult.current = c.result;
+    if (!c.result.pdfPath && c.result.status !== "aborted") setTab("issues");
+    else if (c.result.status === "success") setTab((t) => (t === "issues" ? "pdf" : t));
+  }, [c.result]);
+
   // Follow the live output while compiling.
   useEffect(() => {
     if (tab === "log" && c.compiling) logEnd.current?.scrollIntoView({ block: "end" });
@@ -61,7 +66,7 @@ export function CompilePanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2 text-[13px]">
-        {(["issues", "log"] as const).map((t) => (
+        {(["pdf", "issues", "log"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -69,7 +74,8 @@ export function CompilePanel() {
             onClick={() => setTab(t)}
             className={`rounded-md px-2.5 py-1 ${tab === t ? "bg-surface-2 text-text" : "text-muted hover:text-text"}`}
           >
-            {t === "issues" ? `Issues${issues.length ? ` (${issues.length})` : ""}` : "Log"}
+            {t === "pdf" ? "PDF" : t === "issues" ? `Issues${issues.length ? ` (${issues.length})` : ""}` : "Log"}
+            {t === "issues" && counts.error > 0 && <span className="ml-1.5 inline-block size-1.5 rounded-full bg-danger align-middle" />}
           </button>
         ))}
         <span className="ml-auto truncate pr-1 text-xs text-muted">
@@ -91,10 +97,17 @@ export function CompilePanel() {
         <NoEngine />
       ) : status === "noMainDocument" ? (
         <Empty text="There's no main document to compile. Right-click a .tex file and choose “Set as main document”." />
-      ) : tab === "issues" ? (
+      ) : null}
+
+      {/* The viewer stays mounted so its zoom and scroll survive tab switches. */}
+      <div className={tab === "pdf" && !noEngine && status !== "noMainDocument" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+        {c.result?.rcIgnored && <TrustBanner onTrust={() => void c.trust()} />}
+        <PdfViewer />
+      </div>
+
+      {noEngine || status === "noMainDocument" || tab === "pdf" ? null : tab === "issues" ? (
         <div className="min-h-0 flex-1 overflow-auto">
           {c.result?.rcIgnored && <TrustBanner onTrust={() => void c.trust()} />}
-          {c.result?.pdfPath && <PdfReady path={c.result.pdfPath} />}
           {c.result?.hints.map((h) => (
             <div key={h} className="mx-3 mt-3 flex gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm">
               <Lightbulb size={15} className="mt-0.5 shrink-0 text-accent" />
@@ -209,21 +222,6 @@ function TrustBanner({ onTrust }: { onTrust: () => void }) {
           Trust this project
         </Button>
       </div>
-    </div>
-  );
-}
-
-function PdfReady({ path }: { path: string }) {
-  return (
-    <div className="mx-3 mt-3 flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2.5">
-      <FileText size={20} className="shrink-0 text-accent" />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">PDF ready</div>
-        <div className="truncate text-xs text-muted">The built-in preview comes in the next build.</div>
-      </div>
-      <Button onClick={() => void openPath(path)}>
-        <ExternalLink size={14} /> Open PDF
-      </Button>
     </div>
   );
 }
