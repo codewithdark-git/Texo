@@ -72,3 +72,75 @@ export function Menu({ trigger, items, align = "right" }: MenuProps) {
     </div>
   );
 }
+
+/** A menu opened at the mouse position, for right-click actions. */
+export function ContextMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  items: (MenuItem | "divider")[];
+  onClose: () => void;
+}) {
+  const root = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ x, y });
+
+  useEffect(() => {
+    // Keep the menu on screen near the right and bottom edges.
+    const el = root.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      setPos({
+        x: Math.min(x, window.innerWidth - r.width - 8),
+        y: Math.min(y, window.innerHeight - r.height - 8),
+      });
+    }
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [x, y, onClose]);
+
+  return (
+    <div
+      ref={root}
+      role="menu"
+      style={{ left: pos.x, top: pos.y }}
+      className="fixed z-50 min-w-52 rounded-lg border border-border bg-surface p-1 shadow-xl"
+    >
+      {items.map((item, i) =>
+        item === "divider" ? (
+          <div key={`d${i}`} className="my-1 h-px bg-border" />
+        ) : (
+          <button
+            key={item.label}
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              onClose();
+              item.onSelect();
+            }}
+            className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-surface-2 ${
+              item.danger ? "text-danger" : "text-text"
+            }`}
+          >
+            <span className="shrink-0 text-muted">{item.icon}</span>
+            <span className="flex-1">{item.label}</span>
+            {item.hint && <span className="text-xs text-muted">{item.hint}</span>}
+          </button>
+        ),
+      )}
+    </div>
+  );
+}
