@@ -73,6 +73,8 @@ export interface Toolchains {
   lualatex: string | null;
   bibtex: string | null;
   biber: string | null;
+  makeindex: string | null;
+  kpsewhich: string | null;
   tectonic: string | null;
   distribution: string | null;
 }

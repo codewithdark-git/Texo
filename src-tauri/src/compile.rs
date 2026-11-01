@@ -56,6 +56,8 @@ pub struct Toolchains {
     pub lualatex: Option<PathBuf>,
     pub bibtex: Option<PathBuf>,
     pub biber: Option<PathBuf>,
+    pub makeindex: Option<PathBuf>,
+    pub kpsewhich: Option<PathBuf>,
     pub tectonic: Option<PathBuf>,
     /// "MiKTeX", "TeX Live", or None.
     pub distribution: Option<String>,
@@ -124,6 +126,8 @@ pub fn detect(tools_dir: &Path) -> Toolchains {
         lualatex: find("lualatex", &dirs),
         bibtex: find("bibtex", &dirs),
         biber: find("biber", &dirs),
+        makeindex: find("makeindex", &dirs),
+        kpsewhich: find("kpsewhich", &dirs),
         tectonic: find("tectonic", &dirs),
         distribution,
     }
@@ -260,6 +264,10 @@ fn run(
     for (k, v) in env {
         cmd.env(k, v);
     }
+    // Extra layer: tools that start programs through cmd.exe won't look in
+    // the current folder (the project). Native Perl ignores this, which is
+    // why latexmk is also given absolute tool paths.
+    cmd.env("NoDefaultCurrentDirectoryInExePath", "1");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -341,7 +349,19 @@ fn safe_file_arg(name: &str) -> String {
     }
 }
 
-fn latexmk_args(engine: Engine, build: &str, main_file: &str, trusted: bool, user_rc: Option<&Path>) -> Vec<String> {
+/// A program path for a latexmk command string: forward slashes, quoted.
+fn quoted_tool(path: &Path) -> String {
+    format!("\"{}\"", path.to_string_lossy().replace('\\', "/"))
+}
+
+fn latexmk_args(
+    engine: Engine,
+    build: &str,
+    main_file: &str,
+    trusted: bool,
+    user_rc: Option<&Path>,
+    tools: &Toolchains,
+) -> Vec<String> {
     let mut args = Vec::new();
     if !trusted {
         // `-norc` skips every rc file, including the project's; add the user's back.
@@ -349,6 +369,31 @@ fn latexmk_args(engine: Engine, build: &str, main_file: &str, trusted: bool, use
         if let Some(rc) = user_rc {
             args.push("-r".to_string());
             args.push(rc.to_string_lossy().into_owned());
+        }
+    }
+    // latexmk starts these tools by bare name, and Windows looks in the
+    // current folder (the project) first, so a project could ship its own
+    // `pdflatex.exe`. Give latexmk the absolute paths instead.
+    let no_shell = if trusted { "" } else { " -no-shell-escape" };
+    if let Some(path) = tools.engine(engine) {
+        let option = match engine {
+            Engine::Pdflatex => "pdflatex",
+            Engine::Xelatex => "xelatex",
+            Engine::Lualatex => "lualatex",
+        };
+        args.push(format!("-{option}={}{no_shell} %O %S", quoted_tool(path)));
+    }
+    let helpers = [
+        ("bibtex", &tools.bibtex, "%O %S"),
+        ("biber", &tools.biber, "%O %S"),
+        ("makeindex", &tools.makeindex, "%O -o %D %S"),
+        ("kpsewhich", &tools.kpsewhich, "%S"),
+    ];
+    for (var, path, rest) in helpers {
+        // Set through Perl's q{…}; a path with braces can't be quoted that way.
+        if let Some(path) = path.as_ref().filter(|p| !p.to_string_lossy().contains(['{', '}'])) {
+            args.push("-e".to_string());
+            args.push(format!("${var}=q{{{} {rest}}}", quoted_tool(path)));
         }
     }
     args.extend([
@@ -439,11 +484,15 @@ pub fn compile(job: &Job) -> CompileResult {
         return result;
     }
     let build_str = build.to_string_lossy().into_owned();
-    let common = vec![
+    let mut common = vec![
         "-interaction=nonstopmode".to_string(),
         "-file-line-error".to_string(),
         "-synctex=1".to_string(),
     ];
+    if !job.trusted {
+        // Even TeX's restricted shell escape runs tools such as bibtex by name.
+        common.push("-no-shell-escape".to_string());
+    }
 
     let finish = |end: RunEnd, output: &mut Vec<String>, result: &mut CompileResult| -> bool {
         match end {
@@ -469,7 +518,7 @@ pub fn compile(job: &Job) -> CompileResult {
     let ran = (|| -> std::io::Result<bool> {
         match job.compiler {
             Compiler::Latexmk => {
-                let args = latexmk_args(job.engine, &build_str, &main_file, job.trusted, user_latexmkrc().as_deref());
+                let args = latexmk_args(job.engine, &build_str, &main_file, job.trusted, user_latexmkrc().as_deref(), job.tools);
                 let latexmk = job.tools.latexmk.as_ref().expect("checked by choose");
                 let end = run(latexmk, &args, &main_dir, &bib_env, job, deadline, &mut output)?;
                 Ok(finish(end, &mut output, &mut result))
@@ -587,12 +636,32 @@ mod tests {
 
     #[test]
     fn untrusted_projects_skip_their_latexmkrc() {
-        let trusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None);
+        let tools = Toolchains::default();
+        let trusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools);
         assert!(!trusted.contains(&"-norc".to_string()));
         let rc = PathBuf::from("C:/Users/me/.latexmkrc");
-        let untrusted = latexmk_args(Engine::Xelatex, "B", "main.tex", false, Some(&rc));
+        let untrusted = latexmk_args(Engine::Xelatex, "B", "main.tex", false, Some(&rc), &tools);
         assert_eq!(&untrusted[..4], ["-norc", "-r", "C:/Users/me/.latexmkrc", "-xelatex"]);
         assert_eq!(untrusted.last().map(String::as_str), Some("main.tex"));
+    }
+
+    #[test]
+    fn latexmk_gets_absolute_tool_paths() {
+        let tools = Toolchains {
+            pdflatex: Some(PathBuf::from(r"C:\Program Files\MiKTeX\bin\pdflatex.exe")),
+            bibtex: Some(PathBuf::from(r"C:\MiKTeX\bibtex.exe")),
+            makeindex: Some(PathBuf::from(r"C:\Odd{dir}\makeindex.exe")),
+            ..Default::default()
+        };
+        let untrusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", false, None, &tools);
+        assert!(untrusted.contains(
+            &r#"-pdflatex="C:/Program Files/MiKTeX/bin/pdflatex.exe" -no-shell-escape %O %S"#.to_string()
+        ));
+        assert!(untrusted.contains(&r#"$bibtex=q{"C:/MiKTeX/bibtex.exe" %O %S}"#.to_string()));
+        // A path that can't be quoted safely is left out rather than mangled.
+        assert!(!untrusted.iter().any(|a| a.contains("makeindex")));
+        let trusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools);
+        assert!(trusted.iter().any(|a| a.starts_with("-pdflatex=") && !a.contains("no-shell-escape")));
     }
 
     #[test]
@@ -713,6 +782,52 @@ mod tests {
             assert_eq!(result.status, Status::Success, "{}", result.output);
             assert_eq!(result.rc_ignored, !trusted);
             assert_eq!(marker.exists(), trusted, "trusted={trusted}");
+        }
+    }
+
+    /// Programs a project ships under tool names (`pdflatex.bat`, …) must
+    /// never run, trusted or not: tools are always started by absolute path.
+    #[test]
+    #[ignore]
+    fn planted_tool_programs_never_run() {
+        let tools = detect(Path::new("."));
+        let root = tempfile::tempdir().unwrap();
+        let project = crate::project::create(root.path(), "Planted", crate::templates::Template::Example).unwrap();
+        let dir = PathBuf::from(&project.path);
+        let marker = dir.join("planted-ran.txt");
+        // Impostors: scripts, and a harmless real program renamed to each tool.
+        // If one ran instead of the real tool, no PDF would be produced.
+        let impostor = Path::new(r"C:\Windows\System32\HOSTNAME.EXE");
+        for name in ["pdflatex", "bibtex", "biber", "makeindex", "kpsewhich", "perl"] {
+            for ext in ["bat", "cmd"] {
+                let script = format!("@echo {name} > \"{}\"\r\n", marker.to_string_lossy());
+                std::fs::write(dir.join(format!("{name}.{ext}")), script).unwrap();
+            }
+            if impostor.is_file() {
+                std::fs::copy(impostor, dir.join(format!("{name}.exe"))).unwrap();
+            }
+        }
+        for compiler in [Compiler::Latexmk, Compiler::Direct] {
+            let Some(compiler) = tools.choose(compiler, Engine::Pdflatex) else { continue };
+            for trusted in [false, true] {
+                let job = Job {
+                    root: &dir,
+                    main: "main.tex",
+                    engine: Engine::Pdflatex,
+                    compiler,
+                    tools: &tools,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    trusted,
+                    on_output: &|_| {},
+                };
+                let result = compile(&job);
+                assert_eq!(result.status, Status::Success, "{compiler:?} trusted={trusted}: {}", result.output);
+                assert!(
+                    !marker.exists(),
+                    "{compiler:?} trusted={trusted} ran {}",
+                    std::fs::read_to_string(&marker).unwrap_or_default()
+                );
+            }
         }
     }
 }
