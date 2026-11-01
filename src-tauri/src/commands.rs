@@ -1,13 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::error::{AppError, AppResult};
+use crate::fsops::{self, FileContent};
 use crate::project::{self, FileEntry, ProjectSummary};
+use crate::symbols::{self, Symbols};
 use crate::settings::Settings;
 use crate::templates::Template;
-use crate::AppState;
+use crate::{watcher, AppState};
 
 type Shared<'a> = State<'a, Mutex<AppState>>;
 
@@ -147,4 +149,102 @@ pub async fn list_project_files(state: Shared<'_>, path: String) -> AppResult<Ve
     let s = lock(&state);
     let (dir, _) = known_project(&s, &path)?;
     Ok(project::list_files(&dir))
+}
+
+#[tauri::command]
+pub async fn set_main_document(
+    state: Shared<'_>,
+    path: String,
+    file: String,
+) -> AppResult<ProjectSummary> {
+    let s = lock(&state);
+    let (dir, external) = known_project(&s, &path)?;
+    fsops::resolve(&dir, &file)?;
+    project::set_main_document(&dir, &file)?;
+    project::summarize(&dir, external).ok_or_else(|| AppError::msg("Couldn't read that project."))
+}
+
+#[tauri::command]
+pub async fn read_file(state: Shared<'_>, path: String, file: String) -> AppResult<FileContent> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    fsops::read(&dir, &file)
+}
+
+#[tauri::command]
+pub async fn write_file(
+    state: Shared<'_>,
+    path: String,
+    file: String,
+    content: String,
+) -> AppResult<()> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    fsops::write(&dir, &file, &content)
+}
+
+#[tauri::command]
+pub async fn create_file(state: Shared<'_>, path: String, file: String) -> AppResult<()> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    fsops::create_file(&dir, &file)
+}
+
+#[tauri::command]
+pub async fn create_folder(state: Shared<'_>, path: String, folder: String) -> AppResult<()> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    fsops::create_folder(&dir, &folder)
+}
+
+#[tauri::command]
+pub async fn rename_path(
+    state: Shared<'_>,
+    path: String,
+    from: String,
+    to: String,
+) -> AppResult<()> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    fsops::rename(&dir, &from, &to)
+}
+
+/// Moves a file or folder inside the project to the Recycle Bin.
+#[tauri::command]
+pub async fn delete_path(state: Shared<'_>, path: String, file: String) -> AppResult<()> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    fsops::delete(&dir, &file)
+}
+
+/// Copies files from elsewhere on disk into the project.
+#[tauri::command]
+pub async fn import_files(
+    state: Shared<'_>,
+    path: String,
+    dest: String,
+    sources: Vec<String>,
+) -> AppResult<Vec<String>> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    let sources: Vec<PathBuf> = sources.into_iter().map(PathBuf::from).collect();
+    fsops::import(&dir, &dest, &sources)
+}
+
+#[tauri::command]
+pub async fn project_symbols(state: Shared<'_>, path: String) -> AppResult<Symbols> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    Ok(symbols::scan(&dir))
+}
+
+/// Starts watching the project folder, replacing any previous watch.
+#[tauri::command]
+pub async fn watch_project(app: AppHandle, state: Shared<'_>, path: String) -> AppResult<()> {
+    let mut s = lock(&state);
+    let dir = known_project(&s, &path)?.0;
+    if s.watcher.as_ref().is_some_and(|w| project::same_path(&w.root, &dir)) {
+        return Ok(());
+    }
+    s.watcher = None;
+    s.watcher = Some(watcher::watch(app, dir)?);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn unwatch_project(state: Shared<'_>) -> AppResult<()> {
+    lock(&state).watcher = None;
+    Ok(())
 }
