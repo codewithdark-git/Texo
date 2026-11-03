@@ -54,3 +54,13 @@ export function formatDate(iso: string): string {
     day: "numeric",
   });
 }
+
+/** `base`, or `base 2`, `base 3`… so a new project doesn't repeat an existing name. */
+export function uniqueName(base: string, taken: string[]): string {
+  const names = new Set(taken.map((n) => n.toLowerCase()));
+  if (!names.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} ${n}`;
+    if (!names.has(candidate.toLowerCase())) return candidate;
+  }
+}

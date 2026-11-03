@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectSummary } from "./api";
-import { filterProjects, formatRelative, sortProjects } from "./projects";
+import { filterProjects, formatRelative, sortProjects, uniqueName } from "./projects";
 
 function project(name: string, lastEdited: string, createdAt = lastEdited): ProjectSummary {
   return {
@@ -58,5 +58,12 @@ describe("formatRelative", () => {
     ["2026-10-27T12:00:00Z", "4 days ago"],
   ])("%s -> %s", (iso, expected) => {
     expect(formatRelative(iso, now)).toBe(expected);
+  });
+});
+
+describe("uniqueName", () => {
+  it("adds the first free number", () => {
+    expect(uniqueName("Example paper", ["Thesis"])).toBe("Example paper");
+    expect(uniqueName("Example paper", ["example paper", "Example paper 2"])).toBe("Example paper 3");
   });
 });
