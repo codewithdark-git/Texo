@@ -182,7 +182,7 @@ export function EditorPane() {
 
       {!showEditor && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-auto p-6 text-center text-muted">
-          {!active && <p>Select a file in the sidebar, or create a new one.</p>}
+          {!active && <EmptyEditor />}
           {view?.kind === "loading" && <Loader2 className="animate-spin" />}
           {view?.kind === "image" && (
             <>
@@ -220,6 +220,33 @@ export function EditorPane() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Shown when no file is open: the quickest ways to get going. */
+function EmptyEditor() {
+  const main = useWorkspace((s) => s.project?.mainDocument);
+  const openFile = useWorkspace((s) => s.openFile);
+  const row = (keys: string, what: string) => (
+    <div className="flex items-center justify-between gap-6">
+      <span>{what}</span>
+      <kbd className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px]">{keys}</kbd>
+    </div>
+  );
+  return (
+    <div className="flex w-full max-w-xs flex-col gap-4">
+      <p className="text-sm">No file is open.</p>
+      {main && (
+        <Button variant="primary" className="self-center" onClick={() => void openFile(main)}>
+          Open {main}
+        </Button>
+      )}
+      <div className="space-y-2 text-left text-xs">
+        {row("Ctrl+P", "Go to a file")}
+        {row("Ctrl+Enter", "Compile")}
+        {row("Ctrl+Shift+/", "All shortcuts")}
+      </div>
     </div>
   );
 }
