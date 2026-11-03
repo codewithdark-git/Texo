@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, FolderCog, Library, Loader2, RefreshCw } from "lucide-react";
 import { useApp } from "../store";
+import { AppMenu } from "./AppMenu";
 
 export function Logo({ size = 28 }: { size?: number }) {
   return (
@@ -66,7 +67,8 @@ export function Sidebar({ onChangeRoot }: { onChangeRoot: () => void }) {
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface/60">
       <div className="flex items-center gap-2.5 px-5 py-4">
         <Logo />
-        <span className="text-[15px] font-semibold tracking-tight">Texo</span>
+        <span className="flex-1 text-[15px] font-semibold tracking-tight">Texo</span>
+        <AppMenu align="left" />
       </div>
 
       <nav className="px-3">

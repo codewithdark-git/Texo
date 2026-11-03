@@ -4,9 +4,10 @@ interface ModalProps {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  wide?: boolean;
 }
 
-export function Modal({ title, children, onClose }: ModalProps) {
+export function Modal({ title, children, onClose, wide }: ModalProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -22,7 +23,7 @@ export function Modal({ title, children, onClose }: ModalProps) {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-2xl"
+        className={`texo-pop w-full rounded-xl border border-border bg-surface p-5 shadow-2xl ${wide ? "max-w-2xl" : "max-w-md"}`}
       >
         <h2 className="mb-4 text-base font-semibold">{title}</h2>
         {children}

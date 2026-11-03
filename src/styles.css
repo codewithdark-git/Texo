@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-/* Colour tokens. Dark is the default; light follows the system setting. */
+/* Colour tokens. Dark is the default. theme.ts sets data-theme on <html> from
+   the user's choice (or the system); the media query covers the moment
+   before it runs. */
 :root {
   --bg: #121318;
   --surface: #1a1c23;
@@ -15,8 +17,22 @@
   color-scheme: dark;
 }
 
+:root[data-theme="light"] {
+  --bg: #f4f5f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f5;
+  --border: #dde0e8;
+  --text: #1b1d24;
+  --muted: #646a7a;
+  --accent: #4f5fe8;
+  --accent-strong: #3b4ad6;
+  --accent-ink: #ffffff;
+  --danger: #c93030;
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #f4f5f8;
     --surface: #ffffff;
     --surface-2: #eef0f5;
@@ -65,6 +81,32 @@ body {
 input,
 textarea {
   user-select: text;
+}
+
+/* Dialogs and toasts ease in rather than popping. */
+.texo-pop {
+  animation: texo-pop 140ms ease-out;
+}
+.texo-toast {
+  animation: texo-toast 180ms ease-out;
+}
+@keyframes texo-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+@keyframes texo-toast {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .texo-pop,
+  .texo-toast {
+    animation: none;
+  }
 }
 
 /* PDF viewer (pdf.js). */

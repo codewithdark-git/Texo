@@ -7,6 +7,7 @@ import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import { registerLatexCompletions } from "./completions";
 import { bibtexConfig, bibtexTokens, latexConfig, latexTokens } from "./latexLanguage";
 import { texoDark, texoLight } from "./themes";
+import { onThemeChange, resolvedTheme, type Theme } from "../lib/theme";
 
 self.MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
@@ -27,10 +28,10 @@ const completions = registerLatexCompletions();
 // In development, drop the old provider when this module hot-reloads.
 import.meta.hot?.dispose(() => completions.dispose());
 
-const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-const applyTheme = () => monaco.editor.setTheme(darkQuery.matches ? "texo-dark" : "texo-light");
-applyTheme();
-darkQuery.addEventListener("change", applyTheme);
+const editorTheme = (theme: Theme) => monaco.editor.setTheme(theme === "dark" ? "texo-dark" : "texo-light");
+editorTheme(resolvedTheme());
+const stopTheme = onThemeChange(editorTheme);
+import.meta.hot?.dispose(stopTheme);
 
 export function languageFor(path: string): string {
   const lower = path.toLowerCase();
