@@ -19,7 +19,9 @@
 ### Projects
 - A dashboard of your projects as a list or a grid of first-page thumbnails, with search and sorting.
 - Start from a blank or an example paper, or open any existing LaTeX folder. Texo finds the main `.tex` file.
-- Rename, duplicate, show in File Explorer, and move to the Recycle Bin.
+- Rename, duplicate, show in File Explorer, and move to the Recycle Bin, from the ⋯ button or a right-click. Short confirmations tell you what happened.
+- Drop a project folder on the window to open it.
+- Light and dark themes (or follow the system), and the window reopens where you left it.
 
 ### Editor
 - The Monaco editor (the one inside VS Code) with LaTeX and BibTeX highlighting, folding, sticky section headers, and warnings for look-alike Unicode characters.
@@ -29,6 +31,9 @@
   - Commands you define with `\newcommand`.
   - File paths for `\input`, `\include`, `\includegraphics` and `\bibliography`.
 - Autosave, tabs, an outline of the current file, image previews, and a file tree. In the tree you can create, rename and move files, drop files in from File Explorer, and choose the main document.
+- **Quick Open** (Ctrl+P) jumps to any file by typing part of its name.
+- Reopening a project brings back its open tabs, the active file, and where your cursor was.
+- The status bar shows the word count of the open file and when the PDF was last compiled.
 - Edits made in other apps appear right away. If a file changes on disk while you have unsaved edits, Texo asks which version to keep.
 
 ### Compiling
@@ -49,13 +54,18 @@
 
 | Keys | Action |
 |---|---|
-| Ctrl+S | Save |
+| Ctrl+P | Go to a file |
+| Ctrl+S | Save (Texo also saves automatically) |
 | Ctrl+Enter | Compile |
+| Ctrl+W / Ctrl+Tab | Close tab / next tab |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Editor zoom in / out / reset |
 | Ctrl+Alt+J | Show the cursor's position in the PDF |
 | Double-click PDF | Jump to the source line |
 | Ctrl+B / Ctrl+I | Bold / italic |
 | Alt+Z | Toggle word wrap |
 | F2 | Rename in the file tree |
+| Ctrl+N / Ctrl+O | New project / open a folder (dashboard) |
+| Ctrl+Shift+/ | All shortcuts |
 
 ## Install
 
@@ -105,10 +115,9 @@ The folder still works in any other LaTeX editor.
 
 ## Roadmap
 
-- **Next alpha:** import and export of zip files, more templates, a word count panel, a settings screen.
-- **Then:** an AI assistant with your own provider key (OpenAI, Anthropic or a local model), with proposed changes you keep or undo, and Fix / Edit / Proofread with AI.
+- **Next alpha:** more small conveniences: more templates, a settings screen, a detailed word count, and zip import and export.
 - **v0.1.0:** version history with restore, and a real-paper compile test suite.
-- **Later:** Zotero, Beamer presentation mode, collaboration, Git sync, macOS.
+- **Later:** an AI writing assistant, Zotero, Beamer presentation mode, collaboration, Git sync, macOS.
 
 ## Development
 
