@@ -10,6 +10,7 @@ import {
   type Template,
 } from "./lib/api";
 import type { SortDir, SortKey } from "./lib/projects";
+import { toast } from "./ui";
 
 export type ViewMode = "list" | "grid";
 
@@ -166,20 +167,33 @@ export const useApp = create<AppStore>((set, get) => {
       if (opened) set({ openProject: opened });
     },
     rename: async (project, name) => {
-      await act(() => api.renameProject(project.path, name));
+      const renamed = await act(() => api.renameProject(project.path, name));
+      if (renamed) toast(`Renamed to “${renamed.name}”`);
     },
     duplicate: async (project) => {
-      await act(() => api.duplicateProject(project.path));
+      const copy = await act(() => api.duplicateProject(project.path));
+      if (copy) toast(`Duplicated as “${copy.name}”`);
     },
     remove: async (project) => {
-      await act(() => api.deleteProject(project.path));
+      const done = await act(async () => {
+        await api.deleteProject(project.path);
+        return true;
+      });
+      if (done) toast(`“${project.name}” moved to the Recycle Bin`);
     },
     forget: async (project) => {
-      await act(() => api.forgetProject(project.path));
+      const done = await act(async () => {
+        await api.forgetProject(project.path);
+        return true;
+      });
+      if (done) toast(`Removed “${project.name}” from the list. Its files are untouched.`, "info");
     },
     setProjectsRoot: async (path) => {
       const settings = await act(() => api.setProjectsRoot(path));
-      if (settings) set({ settings });
+      if (settings) {
+        set({ settings });
+        toast("New projects will be saved in the folder you chose", "info");
+      }
     },
   };
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -22,7 +22,8 @@ import type { ProjectSummary, Template } from "../lib/api";
 import { filterProjects, formatDate, formatRelative, sortProjects, type SortKey } from "../lib/projects";
 import { useApp } from "../store";
 import { Button, ConfirmDialog, PromptDialog } from "./Dialog";
-import { Menu } from "./Menu";
+import { ContextMenu, Menu } from "./Menu";
+import { fileManagerName } from "../ui";
 import { Sidebar } from "./Sidebar";
 
 type DialogState =
@@ -39,6 +40,12 @@ async function pickFolder(title: string): Promise<string | null> {
 export function Dashboard() {
   const app = useApp();
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; project: ProjectSummary } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const onContext = (e: React.MouseEvent, project: ProjectSummary) => {
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, project });
+  };
 
   const visible = useMemo(
     () => sortProjects(filterProjects(app.projects, app.query), app.sortKey, app.sortDir),
@@ -62,7 +69,7 @@ export function Dashboard() {
     { label: "Rename", icon: <Pencil size={15} />, onSelect: () => setDialog({ kind: "rename", project: p }) },
     { label: "Duplicate", icon: <Copy size={15} />, onSelect: () => void app.duplicate(p) },
     {
-      label: "Show in File Explorer",
+      label: `Show in ${fileManagerName}`,
       icon: <FolderOpen size={15} />,
       onSelect: () => void revealItemInDir(p.path),
     },
@@ -168,13 +175,14 @@ export function Dashboard() {
           ) : visible.length === 0 ? (
             <p className="py-16 text-center text-muted">No projects match “{app.query}”.</p>
           ) : app.viewMode === "list" ? (
-            <ProjectTable projects={visible} actionsFor={actionsFor} />
+            <ProjectTable projects={visible} actionsFor={actionsFor} onContext={onContext} />
           ) : (
-            <ProjectGrid projects={visible} actionsFor={actionsFor} />
+            <ProjectGrid projects={visible} actionsFor={actionsFor} onContext={onContext} />
           )}
         </section>
       </main>
 
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={actionsFor(menu.project)} onClose={closeMenu} />}
       {dialog?.kind === "new" && (
         <PromptDialog
           title={dialog.template === "blank" ? "New blank project" : "New example project"}
@@ -262,7 +270,17 @@ function SortHeader({ label, sortKey, className = "" }: { label: string; sortKey
   );
 }
 
-function ProjectTable({ projects, actionsFor }: { projects: ProjectSummary[]; actionsFor: Actions }) {
+type OnContext = (e: React.MouseEvent, project: ProjectSummary) => void;
+
+function ProjectTable({
+  projects,
+  actionsFor,
+  onContext,
+}: {
+  projects: ProjectSummary[];
+  actionsFor: Actions;
+  onContext: OnContext;
+}) {
   const open = useApp((s) => s.open);
   return (
     <table className="w-full border-collapse text-sm">
@@ -279,6 +297,7 @@ function ProjectTable({ projects, actionsFor }: { projects: ProjectSummary[]; ac
           <tr
             key={p.id + p.path}
             onDoubleClick={() => open(p)}
+            onContextMenu={(e) => onContext(e, p)}
             className="group border-b border-border/60 hover:bg-surface"
           >
             <td className="py-2 pl-2">
@@ -308,12 +327,24 @@ function ProjectTable({ projects, actionsFor }: { projects: ProjectSummary[]; ac
   );
 }
 
-function ProjectGrid({ projects, actionsFor }: { projects: ProjectSummary[]; actionsFor: Actions }) {
+function ProjectGrid({
+  projects,
+  actionsFor,
+  onContext,
+}: {
+  projects: ProjectSummary[];
+  actionsFor: Actions;
+  onContext: OnContext;
+}) {
   const open = useApp((s) => s.open);
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
       {projects.map((p) => (
-        <div key={p.id + p.path} className="group rounded-xl border border-border bg-surface hover:border-accent/60">
+        <div
+          key={p.id + p.path}
+          onContextMenu={(e) => onContext(e, p)}
+          className="group rounded-xl border border-border bg-surface transition-colors hover:border-accent/60"
+        >
           <button
             type="button"
             onClick={() => open(p)}
