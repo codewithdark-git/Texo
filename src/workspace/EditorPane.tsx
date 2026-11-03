@@ -6,7 +6,7 @@ import { Button } from "../components/Dialog";
 import { useCompile } from "./compileStore";
 import { syncToPdf } from "./PdfViewer";
 import { nativePath } from "./paths";
-import { getModel, useWorkspace } from "./store";
+import { getModel, savedCursor, useWorkspace } from "./store";
 
 /** Lets other panels (outline, search) move the editor's cursor. */
 export const editorBridge: { editor: monaco.editor.IStandaloneCodeEditor | null } = { editor: null };
@@ -29,21 +29,37 @@ export function revealLine(line: number) {
 }
 
 const PREFS_KEY = "texo.editor";
+const DEFAULT_FONT_SIZE = 14;
 
-function loadWrap(): boolean {
+interface EditorPrefs {
+  wordWrap: boolean;
+  fontSize: number;
+}
+
+function loadPrefs(): EditorPrefs {
   try {
-    return JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}").wordWrap ?? true;
+    return { wordWrap: true, fontSize: DEFAULT_FONT_SIZE, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") };
   } catch {
-    return true;
+    return { wordWrap: true, fontSize: DEFAULT_FONT_SIZE };
   }
 }
 
-function saveWrap(wordWrap: boolean) {
+function savePrefs(patch: Partial<EditorPrefs>) {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ wordWrap }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...patch }));
   } catch {
     // Not important enough to report.
   }
+}
+
+/** Ctrl+= / Ctrl+- / Ctrl+0: change the editor's font size, and remember it. */
+export function zoomEditor(step: 1 | -1 | 0) {
+  const ed = editorBridge.editor;
+  if (!ed) return;
+  const current = ed.getOption(monaco.editor.EditorOption.fontSize);
+  const fontSize = step === 0 ? DEFAULT_FONT_SIZE : Math.min(32, Math.max(9, current + step));
+  ed.updateOptions({ fontSize, lineHeight: Math.round(fontSize * 1.6) });
+  savePrefs({ fontSize });
 }
 
 function formatSize(bytes: number): string {
@@ -68,9 +84,9 @@ export function EditorPane() {
       model: null,
       automaticLayout: true,
       fontFamily: "'Cascadia Code', Consolas, monospace",
-      fontSize: 14,
-      lineHeight: 22,
-      wordWrap: loadWrap() ? "on" : "off",
+      fontSize: loadPrefs().fontSize,
+      lineHeight: Math.round(loadPrefs().fontSize * 1.6),
+      wordWrap: loadPrefs().wordWrap ? "on" : "off",
       minimap: { enabled: false },
       stickyScroll: { enabled: true },
       scrollBeyondLastLine: false,
@@ -108,7 +124,7 @@ export function EditorPane() {
       run: (ed) => {
         const on = ed.getOption(monaco.editor.EditorOption.wordWrap) !== "on";
         ed.updateOptions({ wordWrap: on ? "on" : "off" });
-        saveWrap(on);
+        savePrefs({ wordWrap: on });
       },
     });
     editor.addAction({
@@ -142,7 +158,13 @@ export function EditorPane() {
     shownPath.current = model ? active : null;
     if (model && active) {
       const state = viewStates.current.get(active);
+      const remembered = savedCursor(active);
       if (state) editor.restoreViewState(state);
+      else if (remembered) {
+        // First time this session: go back to where the cursor was last time.
+        editor.setPosition({ lineNumber: remembered.line, column: remembered.column });
+        editor.revealPositionInCenterIfOutsideViewport({ lineNumber: remembered.line, column: remembered.column });
+      }
       editor.focus();
       const pos = editor.getPosition();
       useWorkspace.getState().setCursor(pos ? { line: pos.lineNumber, column: pos.column } : null);

@@ -13,6 +13,7 @@ import {
 } from "../lib/api";
 import { monaco } from "../editor/monaco";
 import { onProjectChanged, useWorkspace } from "./store";
+import { toast } from "../ui";
 
 const PREFS_KEY = "texo.compile";
 const MAX_OUTPUT_LINES = 4000;
@@ -34,6 +35,8 @@ interface CompileStore {
   compiling: boolean;
   queued: boolean;
   result: CompileResult | null;
+  /** When the last compile finished (ms since epoch). */
+  finishedAt: number | null;
   /** Console output of the current or last compile. */
   output: string[];
   toolchains: Toolchains | null;
@@ -96,6 +99,7 @@ export const useCompile = create<CompileStore>((set, get) => {
     compiling: false,
     queued: false,
     result: null,
+    finishedAt: null,
     output: [],
     toolchains: null,
     compiler: "auto",
@@ -141,7 +145,7 @@ export const useCompile = create<CompileStore>((set, get) => {
       modelListener = null;
       onProjectChanged(null);
       applyMarkers([]);
-      set({ compiling: false, queued: false, result: null, output: [], error: null });
+      set({ compiling: false, queued: false, result: null, finishedAt: null, output: [], error: null });
     },
 
     compile: async () => {
@@ -165,11 +169,12 @@ export const useCompile = create<CompileStore>((set, get) => {
       }
       // The workspace was reset or closed while this ran; its result is stale.
       if (run !== currentRun) return;
-      set({ compiling: false, error, ...(result ? { result } : {}) });
+      set({ compiling: false, error, ...(result ? { result, finishedAt: Date.now() } : {}) });
       // The saved PDF shows up in the file tree with its badge.
       const project = useWorkspace.getState().project;
       if (result?.savedPdf && project && project.outputPdf !== result.savedPdf) {
         useWorkspace.setState({ project: { ...project, outputPdf: result.savedPdf } });
+        toast(`PDF saved in your project as “${result.savedPdf}”. It updates after each successful compile.`, "info");
       }
       if (result) applyMarkers(result.issues);
       if (get().queued) void get().compile();
@@ -217,6 +222,7 @@ export const useCompile = create<CompileStore>((set, get) => {
       if (!path) return;
       try {
         await api.trustProject(path);
+        toast("Project trusted. Its latexmkrc will run from now on.");
         void get().compile();
       } catch (err) {
         set({ error: errorText(err) });

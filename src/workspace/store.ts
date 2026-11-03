@@ -12,7 +12,8 @@ import {
 } from "../lib/api";
 import { completionSource } from "../editor/completions";
 import { languageFor, monaco } from "../editor/monaco";
-import { isWithin, joinPath, parentDir, rebase } from "./paths";
+import { baseName, isWithin, joinPath, parentDir, rebase } from "./paths";
+import { toast } from "../ui";
 
 const AUTOSAVE_MS = 800;
 
@@ -72,6 +73,35 @@ let unlisten: UnlistenFn | null = null;
 let symbolsTimer: ReturnType<typeof setTimeout> | undefined;
 let filesTimer: ReturnType<typeof setTimeout> | undefined;
 
+// Open tabs, the active file, and cursors are remembered per project, so
+// reopening a project picks up where you left off.
+interface SavedSession {
+  tabs: string[];
+  active: string | null;
+  cursors: Record<string, { line: number; column: number }>;
+}
+
+const sessionKey = (projectId: string) => `texo.session.${projectId}`;
+let savedCursors: SavedSession["cursors"] = {};
+let sessionTimer: ReturnType<typeof setTimeout> | undefined;
+/** True once the open project has restored its tabs; until then nothing is saved. */
+let sessionReady = false;
+let initToken = 0;
+
+function loadSession(projectId: string): SavedSession | null {
+  try {
+    const raw = localStorage.getItem(sessionKey(projectId));
+    return raw ? (JSON.parse(raw) as SavedSession) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where the cursor was in `path` last time, if the editor hasn't shown it yet this session. */
+export function savedCursor(path: string) {
+  return savedCursors[path];
+}
+
 /** Called after a file is saved or the project's files change (compile on save). */
 let afterChange: ((path: string) => void) | null = null;
 
@@ -94,6 +124,40 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
   const projectPath = () => get().project?.path ?? "";
 
   const fail = (err: unknown) => set({ error: errorText(err) });
+
+  /** Saves and releases the open project (shared by init and teardown). */
+  async function closeProject() {
+    if (!get().project) return;
+    clearTimeout(sessionTimer);
+    // Only a fully opened project has a session worth saving.
+    if (sessionReady) saveSession();
+    sessionReady = false;
+    await get().saveAll();
+    unlisten?.();
+    unlisten = null;
+    await api.unwatchProject().catch(() => {});
+    for (const path of [...models.keys()]) disposeModel(path);
+    completionSource.symbols = { labels: [], citations: [], commands: [] };
+    completionSource.files = [];
+    set({ project: null, files: [], tabs: [], active: null, views: {}, status: {}, cursor: null });
+  }
+
+  function saveSession() {
+    const { project, tabs, active } = get();
+    if (!project) return;
+    const cursors = Object.fromEntries(Object.entries(savedCursors).filter(([p]) => tabs.includes(p)));
+    try {
+      localStorage.setItem(sessionKey(project.id), JSON.stringify({ tabs, active, cursors } satisfies SavedSession));
+    } catch {
+      // Not worth bothering the user about.
+    }
+  }
+
+  function scheduleSession() {
+    if (!sessionReady) return;
+    clearTimeout(sessionTimer);
+    sessionTimer = setTimeout(saveSession, 500);
+  }
 
   function setStatus(path: string, patch: Partial<FileStatus>) {
     set((s) => ({
@@ -217,10 +281,17 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     cursor: null,
 
     init: async (project) => {
-      await get().teardown();
+      // A newer init (or a teardown) makes this one stale: stop as soon as we notice.
+      const token = ++initToken;
+      const stale = () => token !== initToken;
+      // Read the saved session before anything can overwrite it.
+      const session = loadSession(project.id);
+      await closeProject();
+      if (stale()) return;
       set({ project, files: [], tabs: [], active: null, views: {}, status: {}, expanded: {}, error: null });
       try {
         await get().refreshFiles();
+        if (stale()) return;
         unlisten = await listen<FsChanged>(FS_CHANGED_EVENT, (e) => {
           if (e.payload.project === get().project?.path) void onDiskChange(e.payload.paths);
         });
@@ -228,24 +299,26 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       } catch (err) {
         fail(err);
       }
+      if (stale()) return;
       scheduleSymbols();
+      const exists = (p: string) => get().files.some((f) => f.path === p && !f.isDir);
+      savedCursors = session?.cursors ?? {};
+      const reopen = (session?.tabs ?? []).filter((p) => exists(p) && p !== project.outputPdf);
       const main = project.mainDocument;
-      if (main && get().files.some((f) => f.path === main)) {
-        get().expandTo(main);
-        await get().openFile(main);
+      if (reopen.length === 0 && main && exists(main)) reopen.push(main);
+      for (const path of reopen) {
+        get().expandTo(path);
+        await get().openFile(path);
+        if (stale()) return;
       }
+      const active = session?.active;
+      if (active && reopen.includes(active)) await get().openFile(active);
+      if (!stale()) sessionReady = true;
     },
 
     teardown: async () => {
-      if (!get().project) return;
-      await get().saveAll();
-      unlisten?.();
-      unlisten = null;
-      await api.unwatchProject().catch(() => {});
-      for (const path of [...models.keys()]) disposeModel(path);
-      completionSource.symbols = { labels: [], citations: [], commands: [] };
-      completionSource.files = [];
-      set({ project: null, files: [], tabs: [], active: null, views: {}, status: {}, cursor: null });
+      initToken++; // cancels an init that's still opening files
+      await closeProject();
     },
 
     refreshFiles: async () => {
@@ -391,6 +464,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         dropTabs((p) => isWithin(p, path));
         await api.deletePath(projectPath(), path);
         await get().refreshFiles();
+        toast(`Moved “${baseName(path)}” to the Recycle Bin`);
         afterChange?.(path);
       } catch (err) {
         fail(err);
@@ -400,6 +474,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     setMainDocument: async (path) => {
       try {
         set({ project: await api.setMainDocument(projectPath(), path) });
+        toast(`“${baseName(path)}” is now the main document`);
         afterChange?.(path);
       } catch (err) {
         fail(err);
@@ -413,6 +488,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         await get().refreshFiles();
         if (dest) get().expandTo(joinPath(dest, "x"));
         if (added.some(isSymbolSource)) scheduleSymbols();
+        if (added.length) toast(added.length === 1 ? `Added “${baseName(added[0])}”` : `Added ${added.length} files`);
         added.forEach((p) => afterChange?.(p));
       } catch (err) {
         fail(err);
@@ -429,7 +505,29 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       }),
 
     collapseAll: () => set({ expanded: {} }),
-    setCursor: (cursor) => set({ cursor }),
+    setCursor: (cursor) => {
+      set({ cursor });
+      const active = get().active;
+      if (cursor && active) savedCursors[active] = cursor;
+      scheduleSession();
+    },
     setError: (error) => set({ error }),
   };
+});
+
+// Remember tabs whenever they change.
+useWorkspace.subscribe((state, prev) => {
+  if (sessionReady && state.project && (state.tabs !== prev.tabs || state.active !== prev.active)) {
+    clearTimeout(sessionTimer);
+    sessionTimer = setTimeout(() => {
+      const { project, tabs, active } = useWorkspace.getState();
+      if (!project) return;
+      const cursors = Object.fromEntries(Object.entries(savedCursors).filter(([p]) => tabs.includes(p)));
+      try {
+        localStorage.setItem(sessionKey(project.id), JSON.stringify({ tabs, active, cursors }));
+      } catch {
+        // Not worth bothering the user about.
+      }
+    }, 500);
+  }
 });

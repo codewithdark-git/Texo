@@ -5,7 +5,15 @@ import { ArrowLeft, Columns2, FileCode2, FileText, ListTree, Files, X } from "lu
 import { SHOW_PDF_EVENT, type ProjectSummary } from "../lib/api";
 import { useApp } from "../store";
 import { Button } from "../components/Dialog";
+import { AppMenu } from "../components/AppMenu";
+import { countWords } from "../lib/wordcount";
+import { formatRelative } from "../lib/projects";
+import { useUi } from "../ui";
 import { useCompile } from "./compileStore";
+import { baseName } from "./paths";
+import { QuickOpen } from "./QuickOpen";
+import { zoomEditor } from "./EditorPane";
+import { getModel } from "./store";
 import { CompileControls } from "./CompileControls";
 import { CompilePanel } from "./CompilePanel";
 import { EditorPane } from "./EditorPane";
@@ -51,6 +59,7 @@ function startDrag(e: ReactPointerEvent, onMove: (x: number) => void, onEnd: () 
 
 export function Workspace({ project }: { project: ProjectSummary }) {
   const ws = useWorkspace();
+  const dialog = useUi((s) => s.dialog);
   const [prefs, setPrefs] = useState(loadLayout);
   const [panel, setPanel] = useState<Panel>("files");
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -92,12 +101,48 @@ export function Workspace({ project }: { project: ProjectSummary }) {
     return () => window.removeEventListener(SHOW_PDF_EVENT, show);
   }, []);
 
-  // Ctrl+Enter compiles from anywhere (the editor handles it itself too).
+  // Window title: the open file and project.
+  const active = ws.active;
+  const projectName = ws.project?.name ?? project.name;
+  useEffect(() => {
+    const title = active ? `${baseName(active)} — ${projectName} — Texo` : `${projectName} — Texo`;
+    void getCurrentWindow().setTitle(title).catch(() => {});
+  }, [active, projectName]);
+
+  // Workspace shortcuts. Monaco keeps the keys it uses itself (Ctrl+F, …);
+  // these reach the window from the editor and everywhere else.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "Enter" && !e.defaultPrevented) {
+      if (!e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      const state = useWorkspace.getState();
+      const key = e.key.toLowerCase();
+      const handled = () => {
         e.preventDefault();
+        e.stopPropagation();
+      };
+      if (key === "enter") {
+        handled();
         void useCompile.getState().compile();
+      } else if (key === "p" && !e.shiftKey) {
+        handled();
+        useUi.getState().openDialog("quickOpen");
+      } else if (key === "w" && !e.shiftKey) {
+        handled();
+        if (state.active) void state.closeTab(state.active);
+      } else if (key === "tab" && state.tabs.length > 1) {
+        handled();
+        const i = state.active ? state.tabs.indexOf(state.active) : -1;
+        const next = (i + (e.shiftKey ? -1 : 1) + state.tabs.length) % state.tabs.length;
+        void state.openFile(state.tabs[next]);
+      } else if ((key === "=" || key === "+") && !e.shiftKey) {
+        handled();
+        zoomEditor(1);
+      } else if (key === "-" && !e.shiftKey) {
+        handled();
+        zoomEditor(-1);
+      } else if (key === "0" && !e.shiftKey) {
+        handled();
+        zoomEditor(0);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -139,11 +184,21 @@ export function Workspace({ project }: { project: ProjectSummary }) {
 
   return (
     <div className="flex h-full flex-col">
+      {dialog === "quickOpen" && <QuickOpen onClose={() => useUi.getState().openDialog(null)} />}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
         <Button variant="ghost" onClick={() => void close()} aria-label="Back to projects">
           <ArrowLeft size={16} />
         </Button>
         <h1 className="truncate font-semibold">{name}</h1>
+        <button
+          type="button"
+          onClick={() => useUi.getState().openDialog("quickOpen")}
+          title="Quick Open (Ctrl+P)"
+          className="ml-4 hidden h-8 max-w-64 flex-1 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-left text-[13px] text-muted hover:border-accent/50 md:flex"
+        >
+          <span className="flex-1 truncate">Go to file…</span>
+          <kbd className="font-mono text-[11px]">Ctrl+P</kbd>
+        </button>
         <div className="ml-auto">
           <CompileControls />
         </div>
@@ -168,6 +223,7 @@ export function Workspace({ project }: { project: ProjectSummary }) {
             </button>
           ))}
         </div>
+        <AppMenu />
       </header>
 
       {ws.error && (
@@ -255,8 +311,46 @@ export function Workspace({ project }: { project: ProjectSummary }) {
   );
 }
 
+/** Words in the open .tex file, recounted shortly after edits. */
+function useWordCount(active: string | null): number | null {
+  const [count, setCount] = useState<number | null>(null);
+  const isText = useWorkspace((s) => (s.active ? s.views[s.active]?.kind === "text" : false));
+  useEffect(() => {
+    const model = active?.endsWith(".tex") && isText ? getModel(active) : undefined;
+    if (!model) {
+      setCount(null);
+      return;
+    }
+    setCount(countWords(model.getValue()));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const sub = model.onDidChangeContent(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setCount(countWords(model.getValue())), 400);
+    });
+    return () => {
+      clearTimeout(timer);
+      sub.dispose();
+    };
+  }, [active, isText]);
+  return count;
+}
+
+/** "Compiled 2 min ago", refreshed every half minute. */
+function useCompiledAgo(): string | null {
+  const finishedAt = useCompile((s) => s.finishedAt);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((t) => t + 1), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  return finishedAt ? formatRelative(new Date(finishedAt).toISOString()) : null;
+}
+
 function StatusBar() {
   const { cursor, saving, status, active, project } = useWorkspace();
+  const words = useWordCount(active);
+  const compiledAgo = useCompiledAgo();
+  const compiling = useCompile((s) => s.compiling);
   const unsaved = Object.values(status).some((s) => s.dirty);
   const conflict = active ? status[active]?.conflict : false;
   const lang = active?.match(/\.(tex|bib|sty|cls)$/i)?.[1].toLowerCase();
@@ -264,7 +358,9 @@ function StatusBar() {
     <div className="flex h-6 shrink-0 items-center gap-4 border-t border-border bg-surface/60 px-3 text-[11px] text-muted">
       <span>{conflict ? "Changed on disk" : saving > 0 ? "Saving…" : unsaved ? "Unsaved changes" : "All changes saved"}</span>
       {project?.mainDocument && <span>Main: {project.mainDocument}</span>}
+      {compiling ? <span>Compiling…</span> : compiledAgo && <span title="Last compile">Compiled {compiledAgo}</span>}
       <span className="ml-auto">{lang === "bib" ? "BibTeX" : lang ? "LaTeX" : active ? "Plain text" : ""}</span>
+      {words !== null && <span title="Words in this file's text">{words.toLocaleString()} words</span>}
       {cursor && (
         <span>
           Ln {cursor.line}, Col {cursor.column}
