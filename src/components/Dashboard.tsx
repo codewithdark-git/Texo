@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -18,12 +19,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { ProjectSummary, Template } from "../lib/api";
+import { api, type ProjectSummary, type Template } from "../lib/api";
 import { filterProjects, formatDate, formatRelative, sortProjects, type SortKey } from "../lib/projects";
 import { useApp } from "../store";
 import { Button, ConfirmDialog, PromptDialog } from "./Dialog";
 import { ContextMenu, Menu } from "./Menu";
-import { fileManagerName } from "../ui";
+import { fileManagerName, toast } from "../ui";
 import { Sidebar } from "./Sidebar";
 
 type DialogState =
@@ -63,6 +64,59 @@ export function Dashboard() {
     const path = await pickFolder("Open a LaTeX project folder");
     if (path) await app.openFolder(path);
   };
+
+  // Drop a project folder (or a .tex file inside one) on the window to open it.
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    const pending = getCurrentWebview().onDragDropEvent((event) => {
+      const p = event.payload;
+      if (p.type === "over") setDragging(true);
+      else if (p.type === "leave") setDragging(false);
+      else if (p.type === "drop") {
+        setDragging(false);
+        const dropped = p.paths[0];
+        if (!dropped) return;
+        void (async () => {
+          const tryOpen = (path: string) => api.openFolder(path).catch(() => null);
+          // A dropped file opens the folder it's in.
+          const project = (await tryOpen(dropped)) ?? (await tryOpen(dropped.replace(/[\\/][^\\/]+$/, "")));
+          if (!project) {
+            toast("Drop a folder with your LaTeX files to open it as a project.", "error");
+            return;
+          }
+          await useApp.getState().refresh();
+          useApp.getState().open(project);
+        })();
+      }
+    });
+    return () => void pending.then((off) => off());
+  }, []);
+
+  // Keyboard: Ctrl+N new project, Ctrl+O open a folder, Ctrl+F or / to search.
+  const search = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+      if (document.querySelector('[role="dialog"]')) return;
+      const key = e.key.toLowerCase();
+      if (e.ctrlKey && key === "n") {
+        e.preventDefault();
+        setDialog({ kind: "new", template: "example" });
+      } else if (e.ctrlKey && key === "o") {
+        e.preventDefault();
+        void openFolder();
+      } else if ((e.ctrlKey && key === "f") || (key === "/" && !typing)) {
+        e.preventDefault();
+        search.current?.focus();
+        search.current?.select();
+      } else if (key === "escape" && e.target === search.current) {
+        app.setQuery("");
+        search.current?.blur();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const actionsFor = (p: ProjectSummary) => [
     { label: "Open", icon: <BookOpen size={15} />, onSelect: () => app.open(p) },
@@ -123,15 +177,21 @@ export function Dashboard() {
         if (path) await app.setProjectsRoot(path);
       }} />
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="relative flex min-w-0 flex-1 flex-col">
+        {dragging && (
+          <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-xl border-2 border-dashed border-accent bg-accent/10 text-sm font-medium text-text">
+            Drop a project folder to open it
+          </div>
+        )}
         <header className="flex items-center gap-3 border-b border-border px-6 py-4">
           <h1 className="text-lg font-semibold">Projects</h1>
           <div className="relative ml-4 max-w-sm flex-1">
             <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" />
             <input
+              ref={search}
               value={app.query}
               onChange={(e) => app.setQuery(e.target.value)}
-              placeholder="Search projects"
+              placeholder="Search projects  (Ctrl+F)"
               aria-label="Search projects"
               className="h-8 w-full rounded-lg border border-border bg-surface pr-3 pl-9 outline-none focus:border-accent"
             />
