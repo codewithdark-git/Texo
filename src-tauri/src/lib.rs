@@ -37,6 +37,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Reopens the window where the user left it (size, position, maximized).
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let tools_dir = app.path().app_data_dir()?.join("tools");
