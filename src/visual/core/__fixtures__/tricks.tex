@@ -1,0 +1,27 @@
+\documentclass{article}
+\makeatletter
+\def\@mycmd{x}
+\makeatother
+\begin{document}
+
+Use \verb|\begin{x}| and \verb+{+ in text, or \verb*|a b|.
+
+\makeatletter
+\renewcommand\section{\@startsection{section}{1}{0pt}{1ex}{1ex}{\bf}}
+\makeatother
+
+\iffalse
+This is skipped { unbalanced
+\fi
+
+{\catcode`\$=12 A literal $ sign}
+
+\begin{verbatim}
+\end{itemize} { } % not a comment
+\end{verbatim}
+
+\begin{comment}
+hidden \begin{document}
+\end{comment}
+
+\end{document}

@@ -1,0 +1,53 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{siunitx}
+\usepackage[capitalise]{cleveref}
+\usepackage[backend=biber,style=numeric]{biblatex}
+\usepackage{tikz}
+\addbibresource{refs.bib}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\newtheorem{lemma}{Lemma}
+
+\title{On \emph{Things} and Stuff}
+\author{A. Author \and B. Author}
+\date{2024}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We study things. The results are \textbf{bold} and \textit{italic}.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+Let $x \in \R$ and consider \cref{eq:main}. As shown by~\textcite{knuth} and
+\parencite[p.~3]{lamport}, the quantity \SI{3.2}{\metre\per\second} matters.
+
+\begin{align}
+  a &= b + c \label{eq:main} \\
+  d &= e \tag{$*$}
+\end{align}
+
+\begin{lemma}[Main]
+For all $\epsilon > 0$ we have $\norm{x} \leq \epsilon$.
+\end{lemma}
+
+\begin{equation*}
+  \argmin_{x} f(x)
+\end{equation*}
+
+\begin{tikzpicture}
+  \draw (0,0) -- (1,1);
+  \node at (0.5, 0.5) {$\alpha$};
+\end{tikzpicture}
+
+\subsection*{Notes}
+Footnotes\footnote{A note with \emph{style}.} and URLs \url{https://example.org}
+and links \href{https://example.org}{with text} all appear here. See
+Sections~\ref{sec:intro} and \Cref{sec:intro}.
+
+\printbibliography
+
+\end{document}

@@ -1,0 +1,172 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden corpus round trip > ./__fixtures__/article-amsmath.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "command_block": 2,
+    "container": 2,
+    "heading": 2,
+    "math_display": 2,
+    "paragraph": 2,
+    "postamble": 1,
+    "preamble": 1,
+    "raw_block": 1,
+  },
+  "rawRatio": 0.09,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/beamer.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "heading": 1,
+    "postamble": 1,
+    "preamble": 1,
+    "raw_block": 3,
+  },
+  "rawRatio": 0.75,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/broken.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "preamble": 1,
+    "raw_block": 4,
+  },
+  "rawRatio": 1,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/chapter-input.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "command_block": 2,
+    "heading": 2,
+    "paragraph": 2,
+  },
+  "rawRatio": 0,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/commonmark.md tiles byte for byte 1`] = `
+{
+  "counts": {
+    "code_block": 1,
+    "command_block": 1,
+    "container": 1,
+    "heading": 2,
+    "list": 2,
+    "paragraph": 2,
+  },
+  "rawRatio": 0,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/crlf-unicode.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "heading": 1,
+    "list": 1,
+    "paragraph": 3,
+    "postamble": 1,
+    "preamble": 1,
+  },
+  "rawRatio": 0,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/floats.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "figure": 1,
+    "paragraph": 1,
+    "postamble": 1,
+    "preamble": 1,
+    "raw_block": 1,
+    "table_block": 1,
+  },
+  "rawRatio": 0.25,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/frontmatter.md tiles byte for byte 1`] = `
+{
+  "counts": {
+    "heading": 1,
+    "paragraph": 1,
+    "preamble": 1,
+    "raw_block": 2,
+  },
+  "rawRatio": 0.5,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/gfm-math.md tiles byte for byte 1`] = `
+{
+  "counts": {
+    "heading": 1,
+    "list": 1,
+    "math_display": 1,
+    "paragraph": 3,
+    "raw_block": 1,
+    "table_block": 1,
+  },
+  "rawRatio": 0.13,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/hardwrap.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "paragraph": 3,
+    "postamble": 1,
+    "preamble": 1,
+  },
+  "rawRatio": 0,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/lists.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "comment_block": 1,
+    "list": 2,
+    "paragraph": 1,
+    "postamble": 1,
+    "preamble": 1,
+  },
+  "rawRatio": 0,
+}
+`;
+
+exports[`golden corpus round trip > ./__fixtures__/tricks.tex tiles byte for byte 1`] = `
+{
+  "counts": {
+    "paragraph": 2,
+    "postamble": 1,
+    "preamble": 1,
+    "raw_block": 1,
+  },
+  "rawRatio": 0.33,
+}
+`;
+
+exports[`golden corpus round trip > the synthetic thesis round-trips 1`] = `
+{
+  "counts": {
+    "command_block": 4,
+    "comment_block": 9,
+    "figure": 22,
+    "heading": 132,
+    "list": 44,
+    "math_display": 73,
+    "paragraph": 440,
+    "postamble": 1,
+    "preamble": 1,
+    "raw_block": 6,
+    "table_block": 14,
+  },
+  "rawRatio": 0.01,
+}
+`;

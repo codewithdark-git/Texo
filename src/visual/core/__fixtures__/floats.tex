@@ -1,0 +1,43 @@
+\documentclass{article}
+\usepackage{graphicx,subcaption,booktabs,multirow}
+\graphicspath{{figures/}{img/}}
+\begin{document}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.5\linewidth]{plot.pdf}
+  \caption{A \emph{simple} figure.}
+  \label{fig:simple}
+\end{figure}
+
+\begin{figure}
+  \centering
+  \begin{subfigure}{0.45\linewidth}
+    \includegraphics{a.png}
+    \caption{Left}
+  \end{subfigure}
+  \begin{subfigure}{0.45\linewidth}
+    \includegraphics{b.png}
+    \caption{Right}
+  \end{subfigure}
+  \caption{Two panels.}
+\end{figure}
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}lcr@{}}
+    \toprule
+    \multicolumn{2}{c}{Head} & X \\
+    \midrule
+    a & b & c \\
+    \bottomrule
+  \end{tabular}
+  \caption{Booktabs and multicolumn.}
+  \label{tab:bt}
+\end{table}
+
+Declaration groups: {\bfseries bold text}, {\it italic}, {\em emph \bf nested},
+{\ttfamily mono}, {\scshape caps} and {\sffamily sans}.
+
+\end{document}
