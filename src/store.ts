@@ -10,7 +10,27 @@ import {
   type Template,
 } from "./lib/api";
 import type { SortDir, SortKey } from "./lib/projects";
-import { toast } from "./ui";
+import { toast, trashName } from "./ui";
+
+/**
+ * Makes sure a just-imported project gets its first compile. The workspace
+ * compiles on open when auto-compile is on; with it off, this compiles once,
+ * as soon as the workspace has finished opening that project.
+ */
+async function compileOnceOpened(path: string) {
+  const [{ useCompile }, { useWorkspace }] = await Promise.all([
+    import("./workspace/compileStore"),
+    import("./workspace/store"),
+  ]);
+  const stop = useCompile.subscribe((s, prev) => {
+    // Opening ends with the toolchain check, which replaces `toolchains`.
+    if (s.toolchains === prev.toolchains || useWorkspace.getState().project?.path !== path) return;
+    stop();
+    clearTimeout(timer);
+    if (!s.auto && !s.compiling && !s.result) void s.compile();
+  });
+  const timer = setTimeout(stop, 30_000);
+}
 
 export type ViewMode = "list" | "grid";
 
@@ -60,6 +80,8 @@ interface AppStore extends Prefs {
 
   createProject: (name: string, template: Template) => Promise<void>;
   openFolder: (path: string) => Promise<void>;
+  /** Imports a .zip or .tar.gz as a new project and opens it. */
+  importProject: (archivePath: string, name: string, main: string | null) => Promise<boolean>;
   rename: (project: ProjectSummary, name: string) => Promise<void>;
   duplicate: (project: ProjectSummary) => Promise<void>;
   remove: (project: ProjectSummary) => Promise<void>;
@@ -166,6 +188,14 @@ export const useApp = create<AppStore>((set, get) => {
       const opened = await act(() => api.openFolder(path));
       if (opened) set({ openProject: opened });
     },
+    importProject: async (archivePath, name, main) => {
+      const imported = await act(() => api.importArchive(archivePath, name, main));
+      if (!imported) return false;
+      void compileOnceOpened(imported.path);
+      set({ openProject: imported });
+      toast(`Imported “${imported.name}”`);
+      return true;
+    },
     rename: async (project, name) => {
       const renamed = await act(() => api.renameProject(project.path, name));
       if (renamed) toast(`Renamed to “${renamed.name}”`);
@@ -179,7 +209,7 @@ export const useApp = create<AppStore>((set, get) => {
         await api.deleteProject(project.path);
         return true;
       });
-      if (done) toast(`“${project.name}” moved to the Recycle Bin`);
+      if (done) toast(`“${project.name}” moved to the ${trashName}`);
     },
     forget: async (project) => {
       const done = await act(async () => {

@@ -1,3 +1,4 @@
+mod archive;
 mod commands;
 mod compile;
 mod engine;
@@ -88,6 +89,11 @@ pub fn run() {
             commands::save_thumbnail,
             commands::engine_status,
             commands::prepare_engine,
+            commands::inspect_archive,
+            commands::import_archive,
+            commands::export_project,
+            commands::save_pdf_as,
+            commands::read_asset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Texo");

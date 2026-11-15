@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::archive::{self, ArchivePreview};
 use crate::compile::{self, CompileResult, Compiler, Toolchains};
 use crate::engine::{self, EngineStatus};
 use crate::error::{AppError, AppResult};
@@ -506,4 +507,116 @@ pub async fn prepare_engine(app: AppHandle, state: Shared<'_>) -> AppResult<()> 
     })
     .await
     .map_err(|e| AppError::msg(e.to_string()))?
+}
+
+/// Reads an archive's contents for the import dialog without extracting it.
+#[tauri::command]
+pub async fn inspect_archive(path: String) -> AppResult<ArchivePreview> {
+    tauri::async_runtime::spawn_blocking(move || archive::inspect(Path::new(&path)))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))?
+}
+
+fn progress_emitter(app: AppHandle) -> impl Fn(u64, u64) {
+    move |done, total| {
+        let _ = app.emit(archive::PROGRESS_EVENT, archive::Progress { done, total });
+    }
+}
+
+/// Imports a `.zip` or `.tar.gz` as a new project in the projects folder.
+/// Imported projects are not trusted: their latexmk config stays off until
+/// the user allows it.
+#[tauri::command]
+pub async fn import_archive(
+    app: AppHandle,
+    state: Shared<'_>,
+    path: String,
+    name: String,
+    main: Option<String>,
+) -> AppResult<ProjectSummary> {
+    let root = lock(&state).settings.projects_root.clone();
+    let progress = progress_emitter(app);
+    tauri::async_runtime::spawn_blocking(move || {
+        archive::import(&root, Path::new(&path), &name, main.as_deref(), &progress)
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))?
+}
+
+/// Saves the project's sources as a `.zip` at `dest`.
+#[tauri::command]
+pub async fn export_project(
+    app: AppHandle,
+    state: Shared<'_>,
+    path: String,
+    dest: String,
+    include_pdf: bool,
+) -> AppResult<()> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    let progress = progress_emitter(app);
+    tauri::async_runtime::spawn_blocking(move || archive::export(&dir, Path::new(&dest), include_pdf, &progress))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))?
+}
+
+/// Copies the project's latest PDF to `dest`.
+#[tauri::command]
+pub async fn save_pdf_as(state: Shared<'_>, path: String, dest: String) -> AppResult<()> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    tauri::async_runtime::spawn_blocking(move || archive::save_pdf_as(&dir, Path::new(&dest)))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))?
+}
+
+/// Extensions `read_asset` serves: figures the editor previews.
+const ASSET_EXTENSIONS: &[&str] = &["pdf", "png", "jpg", "jpeg", "svg", "eps"];
+const MAX_ASSET_BYTES: u64 = 15 * 1024 * 1024;
+
+/// A figure's bytes, checked like every other project path.
+fn asset_bytes(dir: &Path, file: &str) -> AppResult<Vec<u8>> {
+    let path = fsops::resolve(dir, file)?;
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if !ASSET_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(AppError::msg("Only PDF, PNG, JPEG, SVG and EPS figures can be previewed."));
+    }
+    if std::fs::metadata(&path)?.len() > MAX_ASSET_BYTES {
+        return Err(AppError::msg("That figure is larger than 15 MiB, so it isn't previewed."));
+    }
+    Ok(std::fs::read(path)?)
+}
+
+/// Raw bytes of a figure in the project (for PDF figure thumbnails).
+#[tauri::command]
+pub async fn read_asset(state: Shared<'_>, path: String, file: String) -> AppResult<Response> {
+    let dir = known_project(&lock(&state), &path)?.0;
+    let bytes = tauri::async_runtime::spawn_blocking(move || asset_bytes(&dir, &file))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))??;
+    Ok(Response::new(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_asset_serves_figures_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        std::fs::create_dir_all(root.join(".texo")).unwrap();
+        std::fs::create_dir_all(root.join("figures")).unwrap();
+        std::fs::write(root.join("figures/plot.PDF"), b"%PDF-1.5").unwrap();
+        std::fs::write(root.join(".texo/secret.pdf"), b"%PDF").unwrap();
+        std::fs::write(root.join("notes.txt"), b"text").unwrap();
+        std::fs::write(dir.path().join("outside.pdf"), b"%PDF").unwrap();
+        std::fs::write(root.join("huge.png"), vec![0u8; (MAX_ASSET_BYTES + 1) as usize]).unwrap();
+
+        assert_eq!(asset_bytes(&root, "figures/plot.PDF").unwrap(), b"%PDF-1.5");
+        assert!(asset_bytes(&root, "../outside.pdf").is_err());
+        assert!(asset_bytes(&root, "figures/../../outside.pdf").is_err());
+        assert!(asset_bytes(&root, ".texo/secret.pdf").is_err());
+        assert!(asset_bytes(&root, "notes.txt").is_err());
+        assert!(asset_bytes(&root, "huge.png").is_err());
+        assert!(asset_bytes(&root, "missing.pdf").is_err());
+    }
 }

@@ -5,10 +5,12 @@ import "pdfjs-dist/web/pdf_viewer.css";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { invoke } from "@tauri-apps/api/core";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   ChevronDown,
   ChevronUp,
   Crosshair,
+  Download,
   ExternalLink,
   FileText,
   Loader2,
@@ -23,6 +25,7 @@ import { api, errorText } from "../lib/api";
 import { useCompile } from "./compileStore";
 import { revealSource } from "./EditorPane";
 import { useWorkspace } from "./store";
+import { toast } from "../ui";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -340,6 +343,13 @@ export function PdfViewer() {
           onClick={() => updatePrefs({ dark: !prefs.dark })}
           icon={prefs.dark ? <Sun size={14} /> : <Moon size={14} />}
         />
+        {result?.pdfPath && project && (
+          <ToolButton
+            label="Save PDF as…"
+            onClick={() => void savePdfCopy(project, result.pdfPath!)}
+            icon={<Download size={14} />}
+          />
+        )}
         {result?.pdfPath && (
           <ToolButton
             label="Open in your PDF app"
@@ -451,6 +461,23 @@ function showLocation(viewer: PDFViewer, pageNumber: number, rects: Rect[]) {
     });
     view.div.appendChild(mark);
     setTimeout(() => mark.remove(), 2200);
+  }
+}
+
+/** Asks where to save a copy of the latest PDF, then copies it there. */
+async function savePdfCopy(project: string, pdfPath: string) {
+  const stem = (pdfPath.split(/[\\/]/).pop() ?? "document").replace(/\.pdf$/i, "");
+  const dest = await saveDialog({
+    title: "Save PDF as",
+    defaultPath: `${stem}.pdf`,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!dest) return;
+  try {
+    await api.savePdfAs(project, dest);
+    toast(`PDF saved to ${dest.split(/[\\/]/).pop()}`);
+  } catch (err) {
+    toast(errorText(err), "error");
   }
 }
 

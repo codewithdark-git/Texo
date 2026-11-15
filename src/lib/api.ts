@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Engine = "pdflatex" | "xelatex" | "lualatex";
-export type Template = "blank" | "example";
+export type Template = "blank" | "example" | "report" | "presentation" | "thesis";
 
 export type Compiler = "auto" | "latexmk" | "direct" | "tectonic";
 
@@ -137,6 +137,28 @@ export interface OutputChunk {
 
 export const COMPILE_OUTPUT_EVENT = "compile-output";
 
+/** What an archive holds, read before anything is extracted. */
+export interface ArchivePreview {
+  kind: "zip" | "tarGz";
+  fileCount: number;
+  totalBytes: number;
+  /** The single top folder that is removed on import, if any. */
+  stripPrefix: string | null;
+  /** Every `.tex` file, named as it will be in the project. */
+  texFiles: string[];
+  suggestedMain: string | null;
+  suggestedName: string;
+  warnings: string[];
+}
+
+/** Payload of `import-progress` events while an import or export runs. */
+export interface ImportProgress {
+  done: number;
+  total: number;
+}
+
+export const IMPORT_PROGRESS_EVENT = "import-progress";
+
 export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   setProjectsRoot: (path: string) => invoke<Settings>("set_projects_root", { path }),
@@ -178,6 +200,16 @@ export const api = {
   saveThumbnail: (path: string, pngBase64: string) => invoke<void>("save_thumbnail", { path, pngBase64 }),
   engineStatus: () => invoke<EngineStatus>("engine_status"),
   prepareEngine: () => invoke<void>("prepare_engine"),
+
+  // Archives and copies out of the project.
+  inspectArchive: (path: string) => invoke<ArchivePreview>("inspect_archive", { path }),
+  importArchive: (path: string, name: string, main: string | null) =>
+    invoke<ProjectSummary>("import_archive", { path, name, main }),
+  exportProject: (path: string, dest: string, includePdf: boolean) =>
+    invoke<void>("export_project", { path, dest, includePdf }),
+  savePdfAs: (path: string, dest: string) => invoke<void>("save_pdf_as", { path, dest }),
+  /** Raw bytes of a figure (pdf, png, jpg, jpeg, svg or eps, up to 15 MiB). */
+  readAsset: (path: string, file: string) => invoke<ArrayBuffer>("read_asset", { path, file }),
 };
 
 /** Rust errors arrive as plain strings; anything else gets a generic message. */

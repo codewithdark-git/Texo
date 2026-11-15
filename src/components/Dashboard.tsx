@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   ArrowDown,
   ArrowUp,
   BookOpen,
   Copy,
+  FileArchive,
+  FileDown,
   FileText,
   FolderOpen,
   FolderInput,
@@ -19,16 +21,20 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, type ProjectSummary, type Template } from "../lib/api";
-import { filterProjects, formatDate, formatRelative, sortProjects, uniqueName, type SortKey } from "../lib/projects";
+import { api, errorText, type ProjectSummary, type Template } from "../lib/api";
+import { filterProjects, formatDate, formatRelative, sortProjects, type SortKey } from "../lib/projects";
 import { useApp } from "../store";
-import { Button, ConfirmDialog, PromptDialog } from "./Dialog";
+import { Button, ConfirmDialog, Modal, PromptDialog } from "./Dialog";
+import { ImportDialog, isArchivePath } from "./ImportDialog";
 import { ContextMenu, Menu } from "./Menu";
-import { fileManagerName, toast } from "../ui";
+import { NewProjectDialog } from "./NewProjectDialog";
+import { fileManagerName, toast, trashName } from "../ui";
 import { Sidebar } from "./Sidebar";
 
 type DialogState =
   | { kind: "new"; template: Template }
+  | { kind: "import"; file: string | null }
+  | { kind: "export"; project: ProjectSummary }
   | { kind: "rename"; project: ProjectSummary }
   | { kind: "delete"; project: ProjectSummary }
   | null;
@@ -36,6 +42,22 @@ type DialogState =
 async function pickFolder(title: string): Promise<string | null> {
   const picked = await openDialog({ directory: true, multiple: false, title });
   return typeof picked === "string" ? picked : null;
+}
+
+/** Asks where to save the project's .zip, then writes it. */
+async function exportZip(project: ProjectSummary, includePdf: boolean) {
+  const dest = await saveDialog({
+    title: "Export project as .zip",
+    defaultPath: `${project.name}.zip`,
+    filters: [{ name: "Zip archive", extensions: ["zip"] }],
+  });
+  if (!dest) return;
+  try {
+    await api.exportProject(project.path, dest, includePdf);
+    toast(`Exported to ${dest.split(/[\\/]/).pop()}`);
+  } catch (err) {
+    toast(errorText(err), "error");
+  }
 }
 
 export function Dashboard() {
@@ -65,7 +87,8 @@ export function Dashboard() {
     if (path) await app.openFolder(path);
   };
 
-  // Drop a project folder (or a .tex file inside one) on the window to open it.
+  // Drop a project folder (or a .tex file inside one) on the window to open
+  // it, or a .zip / .tar.gz to import it.
   const [dragging, setDragging] = useState(false);
   useEffect(() => {
     const pending = getCurrentWebview().onDragDropEvent((event) => {
@@ -76,6 +99,10 @@ export function Dashboard() {
         setDragging(false);
         const dropped = p.paths[0];
         if (!dropped) return;
+        if (isArchivePath(dropped)) {
+          setDialog({ kind: "import", file: dropped });
+          return;
+        }
         void (async () => {
           const tryOpen = (path: string) => api.openFolder(path).catch(() => null);
           // A dropped file opens the folder it's in.
@@ -92,7 +119,8 @@ export function Dashboard() {
     return () => void pending.then((off) => off());
   }, []);
 
-  // Keyboard: Ctrl+N new project, Ctrl+O open a folder, Ctrl+F or / to search.
+  // Keyboard: Ctrl+N new project, Ctrl+O open a folder, Ctrl+Shift+O import
+  // an archive, Ctrl+F or / to search.
   const search = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -102,6 +130,9 @@ export function Dashboard() {
       if (e.ctrlKey && key === "n") {
         e.preventDefault();
         setDialog({ kind: "new", template: "example" });
+      } else if (e.ctrlKey && e.shiftKey && key === "o") {
+        e.preventDefault();
+        setDialog({ kind: "import", file: null });
       } else if (e.ctrlKey && key === "o") {
         e.preventDefault();
         void openFolder();
@@ -127,6 +158,12 @@ export function Dashboard() {
       icon: <FolderOpen size={15} />,
       onSelect: () => void revealItemInDir(p.path),
     },
+    {
+      label: "Export as .zip…",
+      icon: <FileDown size={15} />,
+      // Ask about the PDF only when there is one to include.
+      onSelect: () => (p.outputPdf ? setDialog({ kind: "export", project: p }) : void exportZip(p, false)),
+    },
     "divider" as const,
     ...(p.external
       ? [
@@ -139,7 +176,7 @@ export function Dashboard() {
         ]
       : []),
     {
-      label: "Move to Recycle Bin",
+      label: `Move to ${trashName}`,
       icon: <Trash2 size={15} />,
       danger: true,
       onSelect: () => setDialog({ kind: "delete", project: p }),
@@ -155,16 +192,16 @@ export function Dashboard() {
       )}
       items={[
         {
-          label: "Blank project",
-          hint: "An empty article with main.tex",
+          label: "New project…",
+          hint: "Blank, paper, report, slides or thesis (Ctrl+N)",
           icon: <FileText size={15} />,
-          onSelect: () => setDialog({ kind: "new", template: "blank" }),
+          onSelect: () => setDialog({ kind: "new", template: "example" }),
         },
         {
-          label: "Example project",
-          hint: "Sections, maths, a table and citations",
-          icon: <BookOpen size={15} />,
-          onSelect: () => setDialog({ kind: "new", template: "example" }),
+          label: "Import .zip or .tar.gz…",
+          hint: "Bring a project from another editor (Ctrl+Shift+O)",
+          icon: <FileArchive size={15} />,
+          onSelect: () => setDialog({ kind: "import", file: null }),
         },
       ]}
     />
@@ -180,7 +217,7 @@ export function Dashboard() {
       <main className="relative flex min-w-0 flex-1 flex-col">
         {dragging && (
           <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-xl border-2 border-dashed border-accent bg-accent/10 text-sm font-medium text-text">
-            Drop a project folder to open it
+            Drop a project folder to open it, or a .zip to import it
           </div>
         )}
         <header className="flex items-center gap-3 border-b border-border px-6 py-4">
@@ -231,7 +268,11 @@ export function Dashboard() {
           {app.loading ? (
             <p className="text-muted">Loading projects…</p>
           ) : app.projects.length === 0 ? (
-            <EmptyState onNew={() => setDialog({ kind: "new", template: "example" })} onOpen={openFolder} />
+            <EmptyState
+              onNew={() => setDialog({ kind: "new", template: "example" })}
+              onOpen={openFolder}
+              onImport={() => setDialog({ kind: "import", file: null })}
+            />
           ) : visible.length === 0 ? (
             <p className="py-16 text-center text-muted">No projects match “{app.query}”.</p>
           ) : app.viewMode === "list" ? (
@@ -243,20 +284,10 @@ export function Dashboard() {
       </main>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={actionsFor(menu.project)} onClose={closeMenu} />}
-      {dialog?.kind === "new" && (
-        <PromptDialog
-          title={dialog.template === "blank" ? "New blank project" : "New example project"}
-          label="Project name"
-          initial={uniqueName(dialog.template === "blank" ? "Untitled" : "Example paper", app.projects.map((p) => p.name))}
-          confirmLabel="Create"
-          onClose={() => setDialog(null)}
-          onSubmit={(name) => {
-            setDialog(null);
-            void app.createProject(name, dialog.template);
-          }}
-        >
-          <p className="mt-2 text-xs text-muted">Saved in {app.settings?.projectsRoot}</p>
-        </PromptDialog>
+      {dialog?.kind === "new" && <NewProjectDialog initial={dialog.template} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "import" && <ImportDialog file={dialog.file} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "export" && (
+        <ExportDialog project={dialog.project} onClose={() => setDialog(null)} />
       )}
       {dialog?.kind === "rename" && (
         <PromptDialog
@@ -273,14 +304,14 @@ export function Dashboard() {
       )}
       {dialog?.kind === "delete" && (
         <ConfirmDialog
-          title="Move project to the Recycle Bin?"
+          title={`Move project to the ${trashName}?`}
           message={
             <>
-              <strong className="text-text">{dialog.project.name}</strong> and all its files will be moved to the
-              Recycle Bin. You can restore them from there.
+              <strong className="text-text">{dialog.project.name}</strong> and all its files will be moved to the{" "}
+              {trashName}. You can restore them from there.
             </>
           }
-          confirmLabel="Move to Recycle Bin"
+          confirmLabel={`Move to ${trashName}`}
           danger
           onClose={() => setDialog(null)}
           onConfirm={() => {
@@ -437,7 +468,36 @@ function ProjectGrid({
   );
 }
 
-function EmptyState({ onNew, onOpen }: { onNew: () => void; onOpen: () => void }) {
+/** Asks whether the compiled PDF goes into the exported .zip. */
+function ExportDialog({ project, onClose }: { project: ProjectSummary; onClose: () => void }) {
+  const [includePdf, setIncludePdf] = useState(false);
+  return (
+    <Modal title="Export as .zip" onClose={onClose}>
+      <p className="text-sm text-muted">
+        The .zip holds the sources of <strong className="text-text">{project.name}</strong>, without build files.
+      </p>
+      <label className="mt-4 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={includePdf} onChange={(e) => setIncludePdf(e.target.checked)} />
+        Include the compiled PDF ({project.outputPdf})
+      </label>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          autoFocus
+          variant="primary"
+          onClick={() => {
+            onClose();
+            void exportZip(project, includePdf);
+          }}
+        >
+          Export…
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+function EmptyState({ onNew, onOpen, onImport }: { onNew: () => void; onOpen: () => void; onImport: () => void }) {
   return (
     <div className="flex flex-col items-center py-24 text-center">
       <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-surface-2 text-accent">
@@ -454,6 +514,13 @@ function EmptyState({ onNew, onOpen }: { onNew: () => void; onOpen: () => void }
         <Button onClick={onOpen}>
           <FolderInput size={16} /> Open folder
         </Button>
+      </div>
+      <div className="mt-8 flex max-w-md items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 text-left">
+        <FileArchive size={20} className="shrink-0 text-accent" />
+        <p className="flex-1 text-sm text-muted">
+          Moving from another LaTeX editor? Download your project as a .zip and import it here.
+        </p>
+        <Button onClick={onImport}>Import</Button>
       </div>
     </div>
   );

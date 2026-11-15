@@ -40,3 +40,4 @@ export const toast = (text: string, kind?: ToastKind) => useUi.getState().toast(
 
 /** What the platform calls its file browser, for menu labels. */
 export const fileManagerName = navigator.userAgent.includes("Windows") ? "File Explorer" : "file manager";
+export const trashName = navigator.userAgent.includes("Windows") ? "Recycle Bin" : "Trash";

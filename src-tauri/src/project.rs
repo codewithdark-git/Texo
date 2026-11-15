@@ -191,6 +191,69 @@ fn is_tex(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("tex"))
 }
 
+/// How a `.tex` file looks as a candidate main document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainCandidate {
+    /// Relative path with `/` separators.
+    pub path: String,
+    pub has_documentclass: bool,
+    pub has_begin_document: bool,
+}
+
+impl MainCandidate {
+    /// Classifies a file from its text. Commented-out lines don't count.
+    pub fn from_text(path: String, text: &str) -> Self {
+        let (mut class, mut begin) = (false, false);
+        for line in text.lines().map(str::trim_start).filter(|l| !l.starts_with('%')) {
+            class |= line.starts_with("\\documentclass");
+            begin |= line.contains("\\begin{document}");
+        }
+        MainCandidate { path, has_documentclass: class, has_begin_document: begin }
+    }
+}
+
+/// Picks the main document: files with both `\documentclass` and
+/// `\begin{document}` first, then `main.tex`, then the shallowest path
+/// (ties broken alphabetically).
+pub fn rank_main_candidates(candidates: &[MainCandidate]) -> Option<String> {
+    candidates
+        .iter()
+        .min_by_key(|c| {
+            let name = c.path.rsplit('/').next().unwrap_or("");
+            (
+                !(c.has_documentclass && c.has_begin_document),
+                !c.has_documentclass,
+                !name.eq_ignore_ascii_case("main.tex"),
+                c.path.matches('/').count(),
+                c.path.to_lowercase(),
+            )
+        })
+        .map(|c| c.path.clone())
+}
+
+/// Largest `.tex` file read when ranking main documents.
+pub const MAX_RANKED_TEX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Like [`detect_main_document`], but for folders Texo didn't make, such as
+/// imported archives: ranks every `.tex` file up to four folders deep with
+/// [`rank_main_candidates`].
+pub fn detect_main_document_ranked(dir: &Path) -> Option<String> {
+    let candidates: Vec<MainCandidate> = WalkDir::new(dir)
+        .max_depth(5)
+        .into_iter()
+        .filter_entry(|e| e.file_name() != META_DIR)
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && is_tex(e.path()))
+        .filter_map(|e| {
+            let rel = to_slash(e.path().strip_prefix(dir).ok()?);
+            let small = e.metadata().is_ok_and(|m| m.len() <= MAX_RANKED_TEX_BYTES);
+            let bytes = if small { fs::read(e.path()).unwrap_or_default() } else { Vec::new() };
+            Some(MainCandidate::from_text(rel, &String::from_utf8_lossy(&bytes)))
+        })
+        .collect();
+    rank_main_candidates(&candidates)
+}
+
 fn has_documentclass(path: &Path) -> bool {
     fs::read_to_string(path).is_ok_and(|text| {
         text.lines()
@@ -220,7 +283,7 @@ pub fn detect_main_document(dir: &Path) -> Option<String> {
         .and_then(|p| p.strip_prefix(dir).ok().map(to_slash))
 }
 
-fn to_slash(path: &Path) -> String {
+pub fn to_slash(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
@@ -275,7 +338,7 @@ pub fn list(root: &Path, external: &[PathBuf]) -> Vec<ProjectSummary> {
     out
 }
 
-const RESERVED_NAMES: &[&str] = &[
+pub const RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
@@ -308,7 +371,7 @@ pub fn sanitize_folder_name(name: &str) -> String {
 }
 
 /// `root/name`, or `root/name (2)`, `root/name (3)`… if that is taken.
-fn unique_dir(root: &Path, name: &str) -> PathBuf {
+pub fn unique_dir(root: &Path, name: &str) -> PathBuf {
     let base = sanitize_folder_name(name);
     let mut candidate = root.join(&base);
     let mut n = 2;
@@ -325,6 +388,15 @@ fn clean_display_name(name: &str) -> AppResult<String> {
         return Err(AppError::msg("Project name can't be empty."));
     }
     Ok(name.to_string())
+}
+
+/// Writes fresh metadata for a folder Texo just filled (an imported archive)
+/// and returns its summary.
+pub fn adopt(dir: &Path, name: &str, main_document: Option<String>, engine: Engine) -> AppResult<ProjectSummary> {
+    let mut meta = new_meta(clean_display_name(name)?, main_document);
+    meta.engine = engine;
+    write_meta(dir, &meta)?;
+    summarize(dir, false).ok_or_else(|| AppError::msg("The project was imported but can't be read."))
 }
 
 pub fn create(root: &Path, name: &str, template: Template) -> AppResult<ProjectSummary> {
@@ -379,12 +451,13 @@ pub fn rename(dir: &Path, new_name: &str, rename_folder: bool) -> AppResult<Path
 }
 
 /// Copies the project into `root` as "Copy of …", with a fresh id. Version
-/// history is not copied.
+/// history and build files are not copied.
 pub fn duplicate(dir: &Path, root: &Path) -> AppResult<ProjectSummary> {
     let source = ensure_meta(dir)?;
     let name = format!("Copy of {}", source.name);
     let target = unique_dir(root, &name);
     let history = Path::new(META_DIR).join("history");
+    let build = Path::new(META_DIR).join("build");
 
     for entry in WalkDir::new(dir).min_depth(1) {
         let entry = entry.map_err(|e| AppError::msg(e.to_string()))?;
@@ -392,7 +465,7 @@ pub fn duplicate(dir: &Path, root: &Path) -> AppResult<ProjectSummary> {
             .path()
             .strip_prefix(dir)
             .map_err(|e| AppError::msg(e.to_string()))?;
-        if rel.starts_with(&history) {
+        if rel.starts_with(&history) || rel.starts_with(&build) {
             continue;
         }
         let dest = target.join(rel);
@@ -558,6 +631,29 @@ mod tests {
     }
 
     #[test]
+    fn ranks_main_documents_for_imported_folders() {
+        let c = |path: &str, text: &str| MainCandidate::from_text(path.into(), text);
+        let full = "\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n";
+        // A complete document beats a main.tex that is only a fragment.
+        assert_eq!(
+            rank_main_candidates(&[c("main.tex", "\\section{A}"), c("paper/paper.tex", full)]).as_deref(),
+            Some("paper/paper.tex")
+        );
+        // Among complete documents, main.tex wins, then the shallowest.
+        assert_eq!(rank_main_candidates(&[c("a/z.tex", full), c("b/main.tex", full)]).as_deref(), Some("b/main.tex"));
+        assert_eq!(rank_main_candidates(&[c("a/b/x.tex", full), c("y.tex", full)]).as_deref(), Some("y.tex"));
+        // A commented-out class doesn't count.
+        assert!(!c("x.tex", "% \\documentclass{article}").has_documentclass);
+        assert_eq!(rank_main_candidates(&[]), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("notes.tex"), "\\section{Notes}").unwrap();
+        fs::write(dir.path().join("src").join("thesis.tex"), full).unwrap();
+        assert_eq!(detect_main_document_ranked(dir.path()).as_deref(), Some("src/thesis.tex"));
+    }
+
+    #[test]
     fn ensure_meta_adopts_a_plain_folder() {
         let parent = tempfile::tempdir().unwrap();
         let dir = parent.path().join("Old paper");
@@ -677,6 +773,8 @@ mod tests {
         let src = PathBuf::from(&p.path);
         fs::create_dir_all(src.join(META_DIR).join("history")).unwrap();
         fs::write(src.join(META_DIR).join("history").join("v1"), "old").unwrap();
+        fs::create_dir_all(src.join(META_DIR).join("build")).unwrap();
+        fs::write(src.join(META_DIR).join("build").join("main.aux"), "aux").unwrap();
         fs::create_dir_all(src.join("figures")).unwrap();
 
         let copy = duplicate(&src, root.path()).unwrap();
@@ -686,6 +784,7 @@ mod tests {
         assert!(dst.join("references.bib").is_file());
         assert!(dst.join("figures").is_dir());
         assert!(!dst.join(META_DIR).join("history").exists());
+        assert!(!dst.join(META_DIR).join("build").exists());
     }
 
     #[test]

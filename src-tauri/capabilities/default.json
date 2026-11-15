@@ -9,6 +9,7 @@
     "core:window:allow-set-title",
     "core:window:allow-set-theme",
     "dialog:allow-open",
+    "dialog:allow-save",
     "opener:allow-reveal-item-in-dir",
     "opener:allow-open-url",
     {

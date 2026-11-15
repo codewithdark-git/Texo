@@ -1,0 +1,85 @@
+\documentclass[11pt]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+
+\title{Report Title}
+\author{Your Name \\ \small Your Organisation}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\chapter{Introduction}
+\label{ch:intro}
+
+This report template has a title page, a table of contents, two chapters,
+a figure, a table and a bibliography. Replace this text with your own.
+
+\section{Background}
+
+State the question the report answers and why it matters. Earlier work
+can be cited from the bibliography file~\cite{lamport1994}.
+
+\section{Scope}
+
+The report covers:
+\begin{itemize}
+  \item the first topic;
+  \item the second topic;
+  \item the limits of this work.
+\end{itemize}
+
+\chapter{Findings}
+\label{ch:findings}
+
+\section{Overview}
+
+Chapter~\ref{ch:intro} set out the scope. This chapter presents the
+results. A key relation is
+\begin{equation}
+  y = a x + b .
+  \label{eq:line}
+\end{equation}
+
+\begin{figure}[h]
+  \centering
+  \fbox{\parbox[c][4cm][c]{0.6\textwidth}{\centering Figure placeholder}}
+  \caption{A placeholder for a figure.}
+  \label{fig:placeholder}
+\end{figure}
+
+\section{Results}
+
+Table~\ref{tab:results} lists example values.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Item & Value & Change \\
+    \midrule
+    First & 10 & +2 \\
+    Second & 25 & -1 \\
+    Third & 40 & +5 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Example values.}
+  \label{tab:results}
+\end{table}
+
+\section{Conclusion}
+
+Summarise the findings and the next steps here.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
