@@ -383,23 +383,23 @@ function StatusBar() {
     (lang === "bib" ? "BibTeX" : lang === "md" || lang === "markdown" ? "Markdown" : lang ? "LaTeX" : active ? "Plain text" : "") +
     (showsVisual(active, modes) ? " · Visual" : "");
   return (
-    <div className="flex h-6 shrink-0 items-center gap-4 border-t border-border bg-surface/60 px-3 text-[11px] text-muted">
-      <span>{conflict ? "Changed on disk" : saving > 0 ? "Saving…" : unsaved ? "Unsaved changes" : "All changes saved"}</span>
-      {project?.mainDocument && <span>Main: {project.mainDocument}</span>}
-      {compiling ? <span>Compiling…</span> : compiledAgo && <span title="Last compile">Compiled {compiledAgo}</span>}
-      <span className="ml-auto">{langLabel}</span>
+    <div className="flex h-6 shrink-0 items-center gap-4 overflow-hidden whitespace-nowrap border-t border-border bg-surface/60 px-3 text-[11px] text-muted">
+      <span className="shrink-0">{conflict ? "Changed on disk" : saving > 0 ? "Saving…" : unsaved ? "Unsaved changes" : "All changes saved"}</span>
+      {project?.mainDocument && <span className="min-w-0 truncate">Main: {project.mainDocument}</span>}
+      {compiling ? <span>Compiling…</span> : compiledAgo && <span className="min-w-0 truncate" title="Last compile">Compiled {compiledAgo}</span>}
+      <span className="ml-auto shrink-0">{langLabel}</span>
       {words !== null && (
         <button
           type="button"
           title="Words in this file's text. Click for details."
           onClick={() => useUi.getState().openDialog("wordCount")}
-          className="rounded px-1 hover:bg-surface-2 hover:text-text"
+          className="shrink-0 rounded px-1 hover:bg-surface-2 hover:text-text"
         >
           {words.toLocaleString()} words
         </button>
       )}
       {cursor && (
-        <span>
+        <span className="shrink-0">
           Ln {cursor.line}, Col {cursor.column}
         </span>
       )}

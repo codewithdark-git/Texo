@@ -120,4 +120,29 @@ describe("Visual input rules", () => {
       expect(t.env.binding.model.getValue()).toBe(t.session.text);
     }
   });
+  it("a Markdown list made by typing '- ' takes new items on Enter", async () => {
+    const { enter } = await import("./commands");
+    const t = setup("# Notes\n\nText.\n", "markdown");
+    t.env.binding.dispatch(t.view.state.tr.setSelection(TextSelection.atEnd(t.view.state.doc)));
+    const press = () => enter(() => t.env)(t.view.state, t.env.binding.dispatch);
+    press();
+    t.type("- first *point*");
+    press();
+    t.type("second");
+    expect(t.model.getValue()).toBe("# Notes\n\nText.\n\n- first *point*\n- second\n");
+    press();
+    press(); // Enter on the empty item leaves the list
+    t.type("After.");
+    expect(t.model.getValue()).toMatch(/- second\n\nAfter\.\n$/);
+  });
+
+  it("'# ' in a new, empty Markdown file makes a heading", () => {
+    for (const text of ["", "\n"]) {
+      const t = setup(text, "markdown");
+      t.env.binding.dispatch(t.view.state.tr.setSelection(TextSelection.atStart(t.view.state.doc)));
+      t.type("# Title");
+      expect(t.model.getValue()).toBe("# Title" + text);
+      expect(t.view.state.doc.firstChild!.type.name).toBe("heading");
+    }
+  });
 });

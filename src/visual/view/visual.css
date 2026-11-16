@@ -83,9 +83,11 @@
 
 /* Beamer: a frame is a slide card, a block a titled box. */
 .visual-doc .v-kind-frame {
+  /* At least a 16:9 slide; a fuller slide grows instead of scrolling inside
+     (with overflow visible, aspect-ratio's automatic minimum fits the content). */
   aspect-ratio: 16 / 9;
   max-height: none;
-  overflow: auto;
+  overflow: visible;
   padding: 0;
   margin: 0.6em 0 1.4em;
   border-radius: 10px;

@@ -216,6 +216,9 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
 
   function createModel(path: string, text: string, dirty = false) {
     const model = monaco.editor.createModel(text, languageFor(path), uriFor(path));
+    // A file with no line breaks yet (a new file) gets LF, not the platform's
+    // CRLF: it's what LaTeX tools and Git expect, and Visual mode starts from it.
+    if (!text.includes("\n")) model.setEOL(monaco.editor.EndOfLineSequence.LF);
     models.set(path, model);
     savedVersion.set(path, dirty ? -1 : model.getAlternativeVersionId());
     model.onDidChangeContent(() => {

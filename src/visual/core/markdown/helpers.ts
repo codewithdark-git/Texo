@@ -52,7 +52,9 @@ export const markdownHelpers: DialectHelpers = {
   },
 
   listAttrs(kind) {
-    return { kind: kind === "description" ? "bullet" : kind, begin: "", end: "", gaps: ["", "", ""] };
+    // Only the two edge gaps: items added later take the line break between
+    // them from the serializer (a third, empty gap would glue them together).
+    return { kind: kind === "description" ? "bullet" : kind, begin: "", end: "", gaps: ["", ""] };
   },
 
   itemAttrs(kind, index, ctx) {

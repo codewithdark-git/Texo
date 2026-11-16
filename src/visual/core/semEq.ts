@@ -72,8 +72,9 @@ function sameAttrs(a: PMNode, b: PMNode): boolean {
     // An item marker's trailing space and continuation indent are spelling:
     // an empty item parses as "\item" (or "-") with the space in the gap.
     if (item && k === "indent") continue;
-    if (item && k === "head") {
-      if (String(a.attrs.head).trimEnd() !== String(b.attrs.head).trimEnd()) return false;
+    // Likewise an empty Markdown heading: "# " reads back as "#".
+    if ((item && k === "head") || (a.type.name === "heading" && k === "open")) {
+      if (String(a.attrs[k]).trimEnd() !== String(b.attrs[k]).trimEnd()) return false;
       continue;
     }
     const x = a.attrs[k];
