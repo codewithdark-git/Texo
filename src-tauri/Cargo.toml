@@ -1,7 +1,7 @@
 [package]
 name = "texo"
-version = "0.1.0-alpha.3"
-description = "Texo — a desktop AI LaTeX editor"
+version = "1.0.0"
+description = "Texo — a desktop LaTeX editor"
 edition = "2021"
 license = "MIT"
 
