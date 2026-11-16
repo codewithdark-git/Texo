@@ -1,0 +1,127 @@
+\documentclass[10pt, twocolumn]{article}
+
+% A two-column paper in a generic conference style. If your venue gives you
+% its own class or style file, add it to the project and switch to it.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[letterpaper, margin=0.75in, columnsep=0.3in]{geometry}
+\usepackage{xcolor}
+\usepackage[colorlinks=true, linkcolor=blue!60!black, citecolor=green!40!black, urlcolor=blue!60!black]{hyperref}
+
+\title{\Large\bfseries A Concise and Informative Title for a Conference Paper}
+\author{
+  First Author \\
+  \small Department, University \\
+  \small City, Country \\
+  \small \texttt{first@example.org}
+  \and
+  Second Author \\
+  \small Research Laboratory \\
+  \small City, Country \\
+  \small \texttt{second@example.org}
+}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+State the problem, your approach and your main result in about 150 words.
+Many reviewers read only the title and the abstract, so say plainly what
+is new and how much better it is than what came before.
+\end{abstract}
+
+\noindent\textbf{Keywords:} first keyword, second keyword, third keyword
+
+\section{Introduction}
+\label{sec:intro}
+
+Explain the problem and why the community should care. Summarise the
+closest earlier work~\cite{surname2023conf, other2022journal} and what it
+leaves open. Most venues expect a clear list of contributions:
+\begin{itemize}
+  \item the first contribution, stated as a result rather than an activity;
+  \item the second contribution;
+  \item an evaluation on a public benchmark (Section~\ref{sec:eval}).
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related}
+
+Group earlier work by approach and say how yours differs from each group.
+Cite the strongest competing method in each group~\cite{lamport1994}
+and state where it falls short.
+
+\section{Approach}
+\label{sec:approach}
+
+Define the notation before you use it. Given inputs
+$x_1, \dots, x_n$ and weights $w_i$, the model predicts
+\begin{equation}
+  \hat{y} = \sigma\Bigl( \sum_{i=1}^{n} w_i x_i + b \Bigr) ,
+  \label{eq:model}
+\end{equation}
+where $\sigma$ is the logistic function. The weights minimise the
+average loss over $N$ training examples,
+\begin{equation}
+  L(w) = \frac{1}{N} \sum_{j=1}^{N} \ell(y_j, \hat{y}_j) ,
+  \label{eq:loss}
+\end{equation}
+where $\ell$ is the cross-entropy between a label and its prediction.
+
+\begin{figure*}[t]
+  \centering
+  \fbox{\parbox[c][3.5cm][c]{0.8\textwidth}{\centering Wide figure placeholder: an overview of the approach}}
+  \caption{A figure that spans both columns. Use \texttt{figure*} for wide diagrams and plain \texttt{figure} for ones that fit a single column.}
+  \label{fig:overview}
+\end{figure*}
+
+\section{Evaluation}
+\label{sec:eval}
+
+Describe the data, the baselines and the metrics, then the results.
+Figure~\ref{fig:overview} gives an overview of the approach in
+Section~\ref{sec:approach}, and Table~\ref{tab:results} compares it with
+two baselines using Equation~\eqref{eq:loss} as the training objective.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{lrr}
+    \toprule
+    Method & Accuracy (\%) & Time (s) \\
+    \midrule
+    Baseline A & 81.2 & 14 \\
+    Baseline B & 84.5 & 32 \\
+    Ours & \textbf{88.9} & 17 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Results on the test set (placeholder numbers).}
+  \label{tab:results}
+\end{table}
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Summarise what the paper showed, its limitations, and the most promising
+direction for future work.
+
+\section*{Acknowledgements}
+
+Thank funders and colleagues here. Leave this section out of an anonymous
+submission.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

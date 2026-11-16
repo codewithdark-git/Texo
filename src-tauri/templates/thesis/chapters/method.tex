@@ -1,13 +1,35 @@
 \chapter{Method}
 \label{ch:method}
 
-Describe the approach. The model used throughout is
+Describe your approach in enough detail for someone else to repeat it.
+The model used throughout is the weighted sum introduced in
+Section~\ref{sec:concepts},
 \begin{equation}
   f(x) = \sum_{i=1}^{n} w_i x_i .
   \label{eq:model}
 \end{equation}
+The rest of the chapter relies on Proposition~\ref{prop:linear}.
 
-\begin{figure}[h]
+\begin{proposition}
+\label{prop:linear}
+The model $f$ is linear: for all inputs $x$ and $y$ and every number $c$,
+\begin{equation}
+  f(x + c y) = f(x) + c f(y) .
+  \label{eq:linear}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Expand the sum in Equation~\eqref{eq:linear} and collect the terms in
+$x_i$ and $y_i$.
+\end{proof}
+
+\section{Overview}
+\label{sec:overview}
+
+Figure~\ref{fig:method} gives an overview of the method.
+
+\begin{figure}[htbp]
   \centering
   \fbox{\parbox[c][4cm][c]{0.6\textwidth}{\centering Figure placeholder}}
   \caption{A placeholder for a diagram of the method.}

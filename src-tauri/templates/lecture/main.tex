@@ -1,0 +1,129 @@
+\documentclass[11pt, a4paper]{article}
+
+% Lecture notes with numbered definitions, theorems and examples, and a
+% boxed key point. Change the course and lecture details in the title, then
+% replace each section with your own material.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+
+% Numbered statements. Theorems, lemmas and corollaries share one counter.
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\newtheorem*{keypoint}{Key point}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+% Draw every key point in a coloured box.
+\tcolorboxenvironment{keypoint}{colback=blue!5, colframe=blue!50!black, boxrule=0.6pt, arc=2pt, left=6pt, right=6pt}
+
+\numberwithin{equation}{section}
+
+\usepackage[colorlinks=true, linkcolor=blue!60!black, citecolor=green!40!black, urlcolor=blue!60!black]{hyperref}
+
+\title{Course Code: Course Title \\[0.5em] \large Lecture 1: Topic of the Lecture}
+\author{Lecturer's Name}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+In this lecture we introduce the main objects of the course, prove the
+first result about them, and work through an example. Before the lecture,
+review your notes on the prerequisites listed in Section~\ref{sec:prereq}.
+\end{abstract}
+
+\tableofcontents
+
+\section{Prerequisites}
+\label{sec:prereq}
+
+These notes assume you are comfortable with:
+\begin{itemize}
+  \item the material of the previous course in the sequence;
+  \item basic algebra and proof by induction;
+  \item summation notation.
+\end{itemize}
+
+\section{Definitions}
+\label{sec:defs}
+
+\begin{definition}
+\label{def:sequence}
+A \emph{sequence} is a function $a \colon \mathbb{N} \to \mathbb{R}$. We
+write $a_n$ for its value at $n$. In these notes
+$\mathbb{N} = \{0, 1, 2, \dots\}$ includes $0$.
+\end{definition}
+
+\begin{example}
+\label{ex:arith}
+The sequence $a_n = 2n + 1$ lists the odd numbers $1, 3, 5, \dots$
+\end{example}
+
+\section{Main Result}
+\label{sec:main}
+
+\begin{theorem}
+\label{thm:sum}
+For every natural number $n \geq 1$,
+\begin{equation}
+  \sum_{k=1}^{n} k = \frac{n(n+1)}{2} .
+  \label{eq:sum}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+We use induction on $n$. For $n = 1$ both sides equal $1$. Assume
+Equation~\eqref{eq:sum} holds for $n$. Then
+\begin{align}
+  \sum_{k=1}^{n+1} k &= \frac{n(n+1)}{2} + (n + 1) \\
+  &= \frac{(n+1)(n+2)}{2} ,
+\end{align}
+which is the statement for $n + 1$.
+\end{proof}
+
+\begin{corollary}
+\label{cor:odd}
+The sum of the first $n$ odd numbers of Example~\ref{ex:arith} is $n^2$.
+\end{corollary}
+
+\begin{keypoint}
+Induction proves a statement for every $n$ by checking a first case and
+showing that each case implies the next. Theorem~\ref{thm:sum} is the
+standard first example.
+\end{keypoint}
+
+\begin{remark}
+There is also a direct proof: write the sum forwards and backwards and
+add the two lines term by term.
+\end{remark}
+
+\section{Exercises}
+\label{sec:exercises}
+
+\begin{enumerate}[label=\arabic*.]
+  \item Prove Corollary~\ref{cor:odd} by induction.
+  \item Find a formula for $\sum_{k=1}^{n} k^2$ and prove it.
+  \item Prove Theorem~\ref{thm:sum} using the direct argument in the remark.
+\end{enumerate}
+
+\end{document}

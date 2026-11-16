@@ -1,9 +1,23 @@
-\documentclass{beamer}
+\documentclass[aspectratio=169, 11pt]{beamer}
 
-\usetheme{default}
+% A widescreen slide deck. Each frame is one slide: change the title
+% details below, pick a theme, and replace the frames with your own.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{booktabs}
+
+% Try other themes such as default, Singapore or CambridgeUS.
+\usetheme{Boadilla}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{blocks}[rounded][shadow=false]
 
 \title{Presentation Title}
-\subtitle{A short subtitle}
+\subtitle{A short subtitle that sets the scene}
 \author{Your Name}
 \institute{Your Organisation}
 \date{\today}
@@ -24,25 +38,26 @@
   \begin{itemize}
     \item State the problem in one sentence.
     \pause
-    \item Explain why it matters.
+    \item Explain why the audience should care.
     \pause
-    \item Say what this talk shows.
+    \item Say what this talk will show them.
   \end{itemize}
 \end{frame}
 
 \section{Main Part}
 
 \begin{frame}{Two Columns}
-  \begin{columns}
-    \begin{column}{0.5\textwidth}
-      The left column holds text.
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      Put the explanation on the left.
       \begin{itemize}
-        \item A first point
-        \item A second point
+        \item One idea per bullet
+        \item Short phrases, not sentences
       \end{itemize}
     \end{column}
-    \begin{column}{0.5\textwidth}
-      The right column holds more text.
+    \begin{column}{0.48\textwidth}
+      \centering
+      \fbox{\parbox[c][3cm][c]{0.9\linewidth}{\centering Picture placeholder}}
     \end{column}
   \end{columns}
 \end{frame}
@@ -55,6 +70,24 @@
   \begin{block}{Key point}
     A block draws attention to one idea.
   \end{block}
+  \begin{alertblock}{Watch out}
+    An alert block marks a warning or a common mistake.
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{Results at a Glance}
+  \begin{table}
+    \centering
+    \begin{tabular}{lrr}
+      \toprule
+      Method & Score & Time (s) \\
+      \midrule
+      Before & 72 & 40 \\
+      After & \alert{91} & 12 \\
+      \bottomrule
+    \end{tabular}
+    \caption{Placeholder numbers: replace them with your own.}
+  \end{table}
 \end{frame}
 
 \section{Summary}
@@ -62,6 +95,7 @@
 \begin{frame}{Summary}
   \begin{itemize}
     \item Repeat the main message.
+    \item Give the one thing to remember.
     \item Thank the audience and take questions.
   \end{itemize}
 \end{frame}

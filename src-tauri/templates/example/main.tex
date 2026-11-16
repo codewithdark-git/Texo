@@ -1,16 +1,28 @@
 \documentclass[11pt]{article}
 
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
+% A short paper that shows the common pieces: sections, equations, a
+% theorem, a figure, a table and citations. Keep the parts you need and
+% replace the placeholder text with your own.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
 \usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage[margin=1in]{geometry}
-\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage[colorlinks=true, linkcolor=blue!60!black, citecolor=green!40!black, urlcolor=blue!60!black]{hyperref}
 
 \newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
 
-\title{A Short Example Paper}
-\author{Your Name \\ \small Your Institution}
+\title{The Title of Your Paper}
+\author{Your Name \\ \small Department, Institution \\ \small \texttt{you@example.org}}
 \date{\today}
 
 \begin{document}
@@ -18,59 +30,83 @@
 \maketitle
 
 \begin{abstract}
-This example shows the pieces most papers need: sections, equations,
-a theorem, a table, cross-references, and a bibliography. Edit any part
-of it, compile, and watch the PDF update.
+Summarise the paper in four or five sentences: the problem you study, why
+it matters, what you did, what you found and what it means. Readers decide
+from the abstract whether to read on, so keep it concrete and leave out
+citations and symbols.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
 
-Writing in \LaTeX{} separates content from layout. Cross-references such
-as Section~\ref{sec:method} and Equation~\eqref{eq:energy} update by
-themselves, and citations come from a \texttt{.bib} file~\cite{knuth1984}.
+Open with the problem and its context. Explain what is already known,
+citing earlier work where it helps~\cite{knuth1984, author2024journal},
+and say what gap this paper fills. End the section with a short list of
+contributions and a pointer to the rest of the paper: Section~\ref{sec:method}
+describes the method and Section~\ref{sec:results} reports the results.
 
 \section{Method}
 \label{sec:method}
 
-Consider a particle of mass $m$ moving with velocity $v$. Its kinetic
-energy is
+Describe what you did in enough detail for someone else to repeat it.
+Number the equations you refer to later. For example, a particle of mass
+$m$ moving with speed $v$ has kinetic energy
 \begin{equation}
   E_k = \frac{1}{2} m v^2 .
   \label{eq:energy}
 \end{equation}
+Use \texttt{align} for derivations that span several lines:
+\begin{align}
+  (a + b)^2 &= a^2 + 2ab + b^2 , \label{eq:square} \\
+  (a - b)^2 &= a^2 - 2ab + b^2 .
+\end{align}
 
 \begin{theorem}
-For every real $x$, $x^2 \geq 0$.
+\label{thm:square}
+For every real number $x$, $x^2 \geq 0$.
 \end{theorem}
 
 \begin{proof}
-If $x \geq 0$ the product of two non-negative numbers is non-negative;
-otherwise $x^2 = (-x)^2$ with $-x > 0$.
+If $x \geq 0$, then $x^2$ is a product of two non-negative numbers.
+Otherwise $x^2 = (-x)^2$ with $-x > 0$.
 \end{proof}
 
 \section{Results}
+\label{sec:results}
 
-Table~\ref{tab:results} lists a few made-up measurements.
+Present what you found, and refer to every figure and table in the text.
+Figure~\ref{fig:overview} is a placeholder: once you have added a picture
+to the project, replace the box with an \texttt{\textbackslash includegraphics} command
+that names the image file. Table~\ref{tab:results} lists values
+computed with Equation~\eqref{eq:energy}.
 
-\begin{table}[h]
+\begin{figure}[t]
   \centering
-  \begin{tabular}{lrr}
+  \fbox{\parbox[c][4cm][c]{0.7\linewidth}{\centering Figure placeholder}}
+  \caption{A short description of what the figure shows.}
+  \label{fig:overview}
+\end{figure}
+
+\begin{table}[t]
+  \centering
+  \begin{tabular}{lrrr}
     \toprule
-    Trial & Mass (kg) & Energy (J) \\
+    Trial & Mass (kg) & Speed (m/s) & Energy (J) \\
     \midrule
-    A & 1.0 & 2.0 \\
-    B & 2.5 & 7.8 \\
-    C & 4.0 & 18.0 \\
+    A & 1.0 & 2.0 & 2.0 \\
+    B & 2.5 & 2.5 & 7.8 \\
+    C & 4.0 & 3.0 & 18.0 \\
     \bottomrule
   \end{tabular}
-  \caption{Example measurements.}
+  \caption{Example measurements. Put the caption of a table above or below it, but be consistent.}
   \label{tab:results}
 \end{table}
 
 \section{Conclusion}
+\label{sec:conclusion}
 
-Replace this text with your own work.
+Restate the main result in one or two sentences, note its limits, and
+suggest what should be done next.
 
 \bibliographystyle{plain}
 \bibliography{references}

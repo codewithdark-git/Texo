@@ -1,11 +1,21 @@
 \documentclass[11pt]{article}
 
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{amsmath}
+% An empty article with the usual packages loaded. Change the title and
+% author below, then start writing.
 
-\title{Untitled}
-\author{}
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage{amsmath, amssymb}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+
+\title{Untitled Document}
+\author{Your Name}
 \date{\today}
 
 \begin{document}

@@ -1,0 +1,63 @@
+\documentclass[11pt, a4paper]{article}
+
+% A formal letter. Replace the addresses, date, subject and text below; the
+% layout follows the usual block style with everything aligned left except
+% the sender's address.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage[colorlinks=true, urlcolor=blue!60!black]{hyperref}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.8em}
+
+\begin{document}
+
+\begin{flushright}
+Your Name \\
+Street Address \\
+City, Postcode \\
+Country \\
+\href{mailto:you@example.org}{you@example.org}
+\end{flushright}
+
+\today
+
+Recipient's Name \\
+Job Title \\
+Organisation \\
+Street Address \\
+City, Postcode
+
+\textbf{Subject: A short line saying what the letter is about}
+
+Dear Recipient's Name,
+
+Open with the reason you are writing, in one or two sentences, so the
+reader knows at once what the letter is about and what you are asking for.
+
+Use the middle paragraphs to give the details: the background, the facts
+that support your request, and any dates or reference numbers the reader
+will need. Keep each paragraph to a single point.
+
+Close by saying what you would like to happen next and how the reader can
+reach you. Thank them for their time.
+
+Yours sincerely,
+
+\vspace{2.5em}
+
+Your Name \\
+Your Job Title
+
+\textbf{Enclosures:} list any documents you are sending with the letter.
+
+\end{document}

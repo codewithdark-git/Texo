@@ -1,8 +1,26 @@
 \chapter{Background}
 \label{ch:background}
 
-Review the earlier work this thesis builds on~\cite{lamport1994}.
+Review the work this thesis builds on. Organise the chapter by theme
+rather than by paper, and say for each theme what is settled and what is
+still open~\cite{lamport1994, surname2024article}.
 
-\section{Key Ideas}
+\section{Key Concepts}
+\label{sec:concepts}
 
-Explain the ideas a reader needs before the method.
+Define the terms a reader needs before the method. The main file
+declares \texttt{definition} and \texttt{proposition} environments for
+statements you want to number and refer to later, as in
+Definition~\ref{def:weighted}.
+
+\begin{definition}
+\label{def:weighted}
+The \emph{weighted sum} of numbers $x_1, \dots, x_n$ with weights
+$w_1, \dots, w_n$ is the number $\sum_{i=1}^{n} w_i x_i$.
+\end{definition}
+
+\section{Related Work}
+\label{sec:related}
+
+Compare the closest earlier approaches with the one in this thesis, and
+explain the gap that Chapter~\ref{ch:method} fills.

@@ -1,83 +1,115 @@
-\documentclass[11pt]{report}
+\documentclass[11pt, a4paper]{report}
 
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{amsmath}
+% A longer report divided into chapters, with a title page and a table of
+% contents. Change the title details, then fill in each chapter.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage[margin=1in]{geometry}
-\usepackage{hyperref}
+\usepackage{xcolor}
+% hypertexnames=false keeps link targets unique when the title and abstract
+% pages share a page number.
+\usepackage[hypertexnames=false, colorlinks=true, linkcolor=blue!60!black, citecolor=green!40!black, urlcolor=blue!60!black]{hyperref}
 
-\title{Report Title}
-\author{Your Name \\ \small Your Organisation}
+\title{Report Title \\[0.5em] \large A Subtitle That Says What the Report Covers}
+\author{Your Name \\ \small Your Team or Organisation}
 \date{\today}
 
 \begin{document}
 
 \maketitle
 
+\begin{abstract}
+Give the reader the whole report in one paragraph: the question it
+answers, how the work was done, the main findings and the recommendation.
+Someone who reads only this summary should know what to do next.
+\end{abstract}
+
 \tableofcontents
 
 \chapter{Introduction}
 \label{ch:intro}
 
-This report template has a title page, a table of contents, two chapters,
-a figure, a table and a bibliography. Replace this text with your own.
+Explain why this report exists, who asked for it and what decision it
+supports. Chapter~\ref{ch:findings} presents the findings and
+Chapter~\ref{ch:recommendations} turns them into recommendations.
 
 \section{Background}
+\label{sec:background}
 
-State the question the report answers and why it matters. Earlier work
-can be cited from the bibliography file~\cite{lamport1994}.
+Describe what was known before this work began. Cite the sources you rely
+on~\cite{lamport1994, team2025internal} so readers can check them.
 
 \section{Scope}
+\label{sec:scope}
 
-The report covers:
+This report covers:
 \begin{itemize}
-  \item the first topic;
+  \item the first topic, and the questions asked about it;
   \item the second topic;
-  \item the limits of this work.
+  \item what is deliberately left out, and why.
 \end{itemize}
 
 \chapter{Findings}
 \label{ch:findings}
 
-\section{Overview}
+\section{Approach}
 
-Chapter~\ref{ch:intro} set out the scope. This chapter presents the
-results. A key relation is
+Summarise how the information was gathered and analysed. When a result
+follows from a formula, state it and number it so you can refer to it
+later. A linear trend, for example, is
 \begin{equation}
-  y = a x + b .
-  \label{eq:line}
+  y = a x + b ,
+  \label{eq:trend}
 \end{equation}
+where $a$ is the rate of change and $b$ the starting value.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
   \centering
   \fbox{\parbox[c][4cm][c]{0.6\textwidth}{\centering Figure placeholder}}
-  \caption{A placeholder for a figure.}
-  \label{fig:placeholder}
+  \caption{Replace this box with a chart or diagram once you add an image to the project.}
+  \label{fig:trend}
 \end{figure}
 
 \section{Results}
+\label{sec:results}
 
-Table~\ref{tab:results} lists example values.
+Figure~\ref{fig:trend} shows the trend described by
+Equation~\eqref{eq:trend}, and Table~\ref{tab:results} lists the values
+behind it.
 
-\begin{table}[h]
+\begin{table}[htbp]
   \centering
   \begin{tabular}{lrr}
     \toprule
     Item & Value & Change \\
     \midrule
-    First & 10 & +2 \\
-    Second & 25 & -1 \\
-    Third & 40 & +5 \\
+    First & 10 & $+2$ \\
+    Second & 25 & $-1$ \\
+    Third & 40 & $+5$ \\
     \bottomrule
   \end{tabular}
-  \caption{Example values.}
+  \caption{Example values (placeholder numbers).}
   \label{tab:results}
 \end{table}
 
-\section{Conclusion}
+\chapter{Recommendations}
+\label{ch:recommendations}
 
-Summarise the findings and the next steps here.
+Turn each finding into an action, with an owner and a date where possible:
+\begin{enumerate}
+  \item the most important action;
+  \item the next action;
+  \item anything that needs further study.
+\end{enumerate}
 
 \bibliographystyle{plain}
 \bibliography{references}

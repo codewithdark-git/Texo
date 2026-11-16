@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Node as PMNode } from "prosemirror-model";
-import { createSession, dialectFor, serializeNode } from "./index";
+import { createSession, dialectFor, readContext, serializeNode, type DocContext } from "./index";
 import { thesis } from "./__fixtures__/thesis";
 
 const fixtures = import.meta.glob("./__fixtures__/*.{tex,md}", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -25,6 +25,27 @@ function tiled(text: string, dialect: "latex" | "markdown"): string {
   return joined;
 }
 
+/**
+ * For a template's \input file: the theorems and other context of its
+ * main.tex, as the app supplies them when it opens a chapter on its own.
+ */
+function templateMainContext(path: string, text: string): Partial<DocContext> | undefined {
+  if (/\\begin\s*\{document\}/.test(text)) return undefined;
+  const dir = path.slice(0, path.indexOf("/", "../../../src-tauri/templates/".length));
+  const main = templates[`${dir}/main.tex`];
+  if (main === undefined) return undefined;
+  const ctx = readContext("latex", main);
+  return {
+    docClass: ctx.docClass,
+    hasChapters: ctx.hasChapters,
+    packages: ctx.packages,
+    macros: ctx.macros,
+    macrosHash: ctx.macrosHash,
+    theorems: ctx.theorems,
+    graphicsPaths: ctx.graphicsPaths,
+  };
+}
+
 function kinds(text: string, dialect: "latex" | "markdown") {
   const s = createSession(dialect, text);
   const counts: Record<string, number> = {};
@@ -47,7 +68,7 @@ describe("golden corpus round trip", () => {
       // A figure without an image (a placeholder box) stays raw until the
       // user adds a picture; nothing else may.
       const raw: string[] = [];
-      createSession("latex", text).doc.forEach((n) => {
+      createSession("latex", text, { context: templateMainContext(path, text) }).doc.forEach((n) => {
         if (n.type.name === "raw_block" && n.attrs.label !== "Figure") raw.push(String(n.attrs.src).slice(0, 60));
       });
       expect(raw).toEqual([]);

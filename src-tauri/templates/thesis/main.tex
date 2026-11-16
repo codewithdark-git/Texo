@@ -1,15 +1,34 @@
-\documentclass[12pt]{report}
+\documentclass[12pt, a4paper, oneside]{report}
 
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{amsmath}
+% The main file of the thesis. Each chapter lives in its own file under
+% chapters/ and is pulled in with \input, so you can work on one at a time.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
 \usepackage{booktabs}
-\usepackage[margin=1in]{geometry}
-\usepackage{hyperref}
+\usepackage[margin=1in, bindingoffset=0.25in]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{xcolor}
+% hypertexnames=false keeps link targets unique when two pages share a
+% number, as the title page and the abstract do.
+\usepackage[hypertexnames=false, colorlinks=true, linkcolor=blue!60!black, citecolor=green!40!black, urlcolor=blue!60!black]{hyperref}
 
-\title{Thesis Title}
-\author{Your Name}
-\date{\today}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{proposition}{Proposition}[chapter]
+
+\title{The Title of Your Thesis \\[1.5em]
+  \large A thesis submitted in partial fulfilment of the requirements \\
+  \large for the degree of Doctor of Philosophy}
+\author{Your Name \\[0.5em] \small Department of Your Subject \\ \small Your University}
+\date{Month Year}
 
 \begin{document}
 
@@ -27,14 +46,14 @@
 \clearpage
 \pagenumbering{arabic}
 
-\include{chapters/introduction}
-\include{chapters/background}
-\include{chapters/method}
-\include{chapters/results}
-\include{chapters/conclusion}
+\input{chapters/introduction}
+\input{chapters/background}
+\input{chapters/method}
+\input{chapters/results}
+\input{chapters/conclusion}
 
 \appendix
-\include{appendix/appendix-a}
+\input{appendix/appendix-a}
 
 \bibliographystyle{plain}
 \bibliography{references}

@@ -7,20 +7,30 @@ use serde::Deserialize;
 pub enum Template {
     Blank,
     Example,
+    Conference,
     Report,
-    Presentation,
     Thesis,
+    Lecture,
+    Homework,
+    Presentation,
+    Letter,
+    Cv,
 }
 
 impl Template {
     /// Every template, in the order the gallery shows them.
     #[cfg(test)]
-    pub const ALL: [Template; 5] = [
+    pub const ALL: [Template; 10] = [
         Template::Blank,
         Template::Example,
+        Template::Conference,
         Template::Report,
-        Template::Presentation,
         Template::Thesis,
+        Template::Lecture,
+        Template::Homework,
+        Template::Presentation,
+        Template::Letter,
+        Template::Cv,
     ];
 
     /// Files as `(relative path, contents)` pairs, with `/` separators.
@@ -30,6 +40,10 @@ impl Template {
             Template::Example => &[
                 ("main.tex", include_str!("../templates/example/main.tex")),
                 ("references.bib", include_str!("../templates/example/references.bib")),
+            ],
+            Template::Conference => &[
+                ("main.tex", include_str!("../templates/conference/main.tex")),
+                ("references.bib", include_str!("../templates/conference/references.bib")),
             ],
             Template::Report => &[
                 ("main.tex", include_str!("../templates/report/main.tex")),
@@ -51,6 +65,10 @@ impl Template {
                 ("appendix/appendix-a.tex", include_str!("../templates/thesis/appendix/appendix-a.tex")),
                 ("references.bib", include_str!("../templates/thesis/references.bib")),
             ],
+            Template::Lecture => &[("main.tex", include_str!("../templates/lecture/main.tex"))],
+            Template::Homework => &[("main.tex", include_str!("../templates/homework/main.tex"))],
+            Template::Letter => &[("main.tex", include_str!("../templates/letter/main.tex"))],
+            Template::Cv => &[("main.tex", include_str!("../templates/cv/main.tex"))],
         }
     }
 }
@@ -64,16 +82,24 @@ mod tests {
 
     #[test]
     fn serde_names_match_the_ui() {
-        for (name, template) in [
+        let names = [
             ("blank", Template::Blank),
             ("example", Template::Example),
+            ("conference", Template::Conference),
             ("report", Template::Report),
-            ("presentation", Template::Presentation),
             ("thesis", Template::Thesis),
-        ] {
+            ("lecture", Template::Lecture),
+            ("homework", Template::Homework),
+            ("presentation", Template::Presentation),
+            ("letter", Template::Letter),
+            ("cv", Template::Cv),
+        ];
+        for (name, template) in names {
             let parsed: Template = serde_json::from_str(&format!("\"{name}\"")).unwrap();
             assert_eq!(parsed, template);
         }
+        // The gallery order is the order above, and no template is missing.
+        assert_eq!(names.map(|(_, t)| t), Template::ALL);
         assert!(serde_json::from_str::<Template>("\"poster\"").is_err());
     }
 
@@ -94,43 +120,73 @@ mod tests {
         }
     }
 
-    /// Compiles every template with the Tectonic that ships with Texo.
-    /// Run with `pnpm test:tex`; needs internet the first time.
+    /// Compiles every template with every toolchain this machine has:
+    /// latexmk and the direct engine run (MiKTeX or TeX Live, pdfLaTeX) and
+    /// the Tectonic that ships with Texo. Each build must succeed with no
+    /// errors, no unresolved references or citations and no overfull boxes.
+    /// Run with `pnpm test:tex`; Tectonic needs internet the first time.
     #[test]
     #[ignore]
-    fn every_template_compiles_with_bundled_tectonic() {
+    fn every_template_compiles_with_every_toolchain() {
         use crate::compile::{self, Compiler, Job, Status, Toolchains};
+        use crate::texlog::Severity;
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
 
+        let mut runs: Vec<(String, Toolchains, Compiler)> = Vec::new();
+        let installed = compile::detect(std::path::Path::new("."));
+        for compiler in [Compiler::Latexmk, Compiler::Direct] {
+            match installed.choose(compiler, project::Engine::Pdflatex) {
+                Some(c) => runs.push((format!("{c:?}"), installed.clone(), c)),
+                None => eprintln!("skipping {compiler:?}: not installed"),
+            }
+        }
         let triple = if cfg!(windows) { "x86_64-pc-windows-msvc.exe" } else { "x86_64-unknown-linux-gnu" };
         let exe = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("binaries/tectonic-{triple}"));
-        if !exe.is_file() {
-            eprintln!("skipping: run `pnpm fetch-engine` first");
-            return;
+        if exe.is_file() {
+            let tools = Toolchains { tectonic: Some(exe), tectonic_bundled: true, ..Default::default() };
+            runs.push(("bundled Tectonic".into(), tools, Compiler::Tectonic));
+        } else {
+            eprintln!("skipping Tectonic: run `pnpm fetch-engine` first");
         }
-        let tools = Toolchains { tectonic: Some(exe), tectonic_bundled: true, ..Default::default() };
-        let root = tempfile::tempdir().unwrap();
-        for template in Template::ALL {
-            let created = project::create(root.path(), &format!("{template:?}"), template).unwrap();
-            let dir = PathBuf::from(&created.path);
-            let result = compile::compile(&Job {
-                root: &dir,
-                main: "main.tex",
-                engine: project::Engine::Pdflatex,
-                compiler: Compiler::Tectonic,
-                tools: &tools,
-                cancel: Arc::new(AtomicBool::new(false)),
-                trusted: false,
-                on_output: &|_| {},
-            });
-            let errors: Vec<_> = result
-                .issues
-                .iter()
-                .filter(|i| i.severity == crate::texlog::Severity::Error)
-                .collect();
-            assert_eq!(result.status, Status::Success, "{template:?}: {errors:?}\n{}", result.output);
-            assert!(errors.is_empty(), "{template:?}: {errors:?}");
+        assert!(!runs.is_empty(), "no TeX toolchain found");
+
+        let mut failures = Vec::new();
+        for (name, tools, compiler) in &runs {
+            let root = tempfile::tempdir().unwrap();
+            for template in Template::ALL {
+                let created = project::create(root.path(), &format!("{template:?}"), template).unwrap();
+                let dir = PathBuf::from(&created.path);
+                let result = compile::compile(&Job {
+                    root: &dir,
+                    main: "main.tex",
+                    engine: project::Engine::Pdflatex,
+                    compiler: *compiler,
+                    tools,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    trusted: false,
+                    on_output: &|_| {},
+                });
+                let bad: Vec<_> = result
+                    .issues
+                    .iter()
+                    .filter(|i| match i.severity {
+                        Severity::Error => true,
+                        Severity::Warning => {
+                            let m = i.message.to_lowercase();
+                            m.contains("undefined") || m.contains("rerun")
+                        }
+                        Severity::Badbox => i.message.starts_with("Overfull"),
+                    })
+                    .map(|i| format!("{:?} {:?}:{:?} {}", i.severity, i.file, i.line, i.message))
+                    .collect();
+                let messages: Vec<_> = result.issues.iter().map(|i| i.message.as_str()).collect();
+                eprintln!("{name} / {template:?}: {:?} {messages:?}", result.status);
+                if result.status != Status::Success || result.pdf_path.is_none() || !bad.is_empty() {
+                    failures.push(format!("{name} / {template:?}: {:?} {bad:#?}\n{}", result.status, result.output));
+                }
+            }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     }
 }

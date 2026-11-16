@@ -1,0 +1,82 @@
+\documentclass[10pt, a4paper]{article}
+
+% A one-page CV. Keep the most relevant experience first, cut anything that
+% does not help the reader, and check that it still fits on one page.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[colorlinks=true, urlcolor=blue!60!black]{hyperref}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.3em}
+\setlist[itemize]{leftmargin=1.2em, topsep=0.2em, itemsep=0.1em, parsep=0pt}
+
+% Section headings: coloured small capitals with tight spacing.
+\makeatletter
+\renewcommand{\section}{\@startsection{section}{1}{0pt}{1.2em}{0.6em}{\normalfont\large\scshape\color{blue!50!black}}}
+\makeatother
+
+\begin{document}
+
+\begin{center}
+{\Huge Your Name} \\[0.4em]
+City, Country \textbullet{} +00 000 000 0000 \textbullet{} \href{mailto:you@example.org}{you@example.org} \textbullet{} \href{https://example.org}{example.org}
+\end{center}
+
+\section*{Profile}
+
+Two or three sentences on who you are, what you are good at and the kind
+of role you are looking for. Write it for the job you are applying to.
+
+\section*{Experience}
+
+\textbf{Job Title} \hfill 2022 -- present \\
+\textit{Company Name, City}
+\begin{itemize}
+  \item Start each point with a verb and say what changed because of you.
+  \item Give numbers where you can: ``cut processing time by 40\%''.
+  \item Keep to three or four points for your most recent role.
+\end{itemize}
+
+\textbf{Previous Job Title} \hfill 2019 -- 2022 \\
+\textit{Previous Company, City}
+\begin{itemize}
+  \item One or two achievements from this role.
+  \item A responsibility that matters for the job you want next.
+\end{itemize}
+
+\section*{Education}
+
+\textbf{Degree, Subject} \hfill 2015 -- 2019 \\
+\textit{University Name, City} \\
+Final project or thesis title, grade or honours if relevant.
+
+\section*{Skills}
+
+\begin{itemize}
+  \item \textbf{Technical:} tools, languages or methods you use well.
+  \item \textbf{Languages:} English (fluent), another language (intermediate).
+  \item \textbf{Other:} certifications, licences or other useful skills.
+\end{itemize}
+
+\section*{Publications}
+
+\begin{enumerate}[label={[\arabic*]}, leftmargin=2em, topsep=0.2em, itemsep=0.1em]
+  \item Surname, G. and You, Y. \textit{The Title of a Paper.} Name of the Journal, 2024.
+  \item You, Y. \textit{The Title of a Conference Talk.} Name of the Conference, 2023.
+\end{enumerate}
+
+\section*{Interests}
+
+A line on interests outside work, if they say something useful about you.
+
+\end{document}

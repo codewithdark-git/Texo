@@ -1,0 +1,121 @@
+\documentclass[11pt, a4paper]{article}
+
+% A homework sheet. Fill in the five details below once, then write each
+% problem in a problem environment with its solution straight after it.
+
+% Fonts and encoding: pdfLaTeX needs these; XeLaTeX and Tectonic do not.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{microtype}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[margin=1in, headheight=14pt]{geometry}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{xcolor}
+
+% Fill in these details once; they appear in the title and on every page.
+\newcommand{\studentname}{Your Name}
+\newcommand{\studentid}{Student ID 0000000}
+\newcommand{\coursename}{Course Code: Course Title}
+\newcommand{\assignmentname}{Assignment 1}
+\newcommand{\duedate}{Due: Day Month Year}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\studentname}
+\fancyhead[C]{\coursename}
+\fancyhead[R]{\assignmentname}
+\fancyfoot[C]{\thepage}
+
+% Each problem is numbered; a solution follows it.
+\theoremstyle{definition}
+\newtheorem{problem}{Problem}
+\theoremstyle{remark}
+\newtheorem*{solution}{Solution}
+
+\setlist[enumerate]{label=(\alph*)}
+
+\usepackage[colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black]{hyperref}
+
+\title{\assignmentname \\[0.3em] \large \coursename}
+\author{\studentname \\ \small \studentid}
+\date{\duedate}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{fancy}
+
+\begin{problem}
+\label{prob:quadratic}
+Let $f(x) = x^2 - 5x + 6$.
+\begin{enumerate}
+  \item Find the roots of $f$.
+  \item Find the minimum value of $f$ and where it is attained.
+\end{enumerate}
+\end{problem}
+
+\begin{solution}
+\begin{enumerate}
+  \item Factorising gives $f(x) = (x - 2)(x - 3)$, so the roots are
+  $x = 2$ and $x = 3$.
+  \item Completing the square,
+  \begin{equation}
+    f(x) = \left(x - \tfrac{5}{2}\right)^2 - \tfrac{1}{4} ,
+    \label{eq:square}
+  \end{equation}
+  so the minimum value is $-\tfrac{1}{4}$, attained at $x = \tfrac{5}{2}$.
+\end{enumerate}
+\end{solution}
+
+\begin{problem}
+\label{prob:divisible}
+Prove that $n^3 - n$ is divisible by $6$ for every integer $n \geq 1$.
+\end{problem}
+
+\begin{solution}
+Write $n^3 - n = (n - 1) n (n + 1)$. Among three consecutive integers one
+is divisible by $3$ and at least one is even, so the product is divisible
+by $2 \cdot 3 = 6$.
+\end{solution}
+
+\begin{problem}
+\label{prob:table}
+Complete the table for $f$ from Problem~\ref{prob:quadratic} and its
+derivative $f'$, and check your answer against Equation~\eqref{eq:square}.
+\begin{center}
+  \begin{tabular}{crr}
+    \toprule
+    $x$ & $f(x)$ & $f'(x)$ \\
+    \midrule
+    $1$ & & \\
+    $2.5$ & & \\
+    $4$ & & \\
+    \bottomrule
+  \end{tabular}
+\end{center}
+\end{problem}
+
+\begin{solution}
+The values of $f$ and its derivative $f'(x) = 2x - 5$ are:
+\begin{center}
+  \begin{tabular}{crr}
+    \toprule
+    $x$ & $f(x)$ & $f'(x)$ \\
+    \midrule
+    $1$ & $2$ & $-3$ \\
+    $2.5$ & $-0.25$ & $0$ \\
+    $4$ & $2$ & $3$ \\
+    \bottomrule
+  \end{tabular}
+\end{center}
+The derivative changes sign at $x = 2.5$, where $f$ takes the value
+$-0.25$, as Equation~\eqref{eq:square} predicts.
+\end{solution}
+
+\end{document}
