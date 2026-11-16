@@ -1,0 +1,322 @@
+/* Visual mode: a readable page in the app's theme. Colours come from the
+   tokens in styles.css, so light and dark both work. */
+
+.visual-pane {
+  --v-chip-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+  --v-chip-border: color-mix(in srgb, var(--accent) 35%, transparent);
+  --v-warn: #d99a1e;
+  --v-code-bg: var(--surface-2);
+  background: var(--bg);
+}
+
+.visual-doc {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: var(--visual-font-size, 16px);
+  line-height: 1.65;
+  color: var(--text);
+  outline: none;
+  min-height: 60vh;
+  caret-color: var(--accent);
+}
+
+.visual-doc > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 3em;
+}
+
+.visual-doc p {
+  margin: 0 0 0.9em;
+  white-space: break-spaces;
+}
+
+.visual-doc .v-heading {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 1.4em 0 0.5em;
+}
+.visual-doc .v-h1 { font-size: 1.75em; }
+.visual-doc .v-h2 { font-size: 1.4em; }
+.visual-doc .v-h3 { font-size: 1.18em; }
+.visual-doc .v-h4 { font-size: 1.05em; font-style: italic; }
+.visual-doc .v-unnumbered::after {
+  content: " *";
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.7em;
+}
+
+.visual-doc .v-list { margin: 0 0 0.9em; padding-left: 1.6em; }
+.visual-doc ul.v-list { list-style: disc; }
+.visual-doc ul.v-list ul.v-list { list-style: circle; }
+.visual-doc ol.v-list { list-style: decimal; }
+.visual-doc .v-list-description { list-style: none; padding-left: 0.4em; }
+.visual-doc .v-item > .v-item-body > p { margin-bottom: 0.25em; }
+.visual-doc .v-item-term { font-weight: 700; margin-right: 0.5em; float: left; }
+
+.visual-doc .v-quote {
+  margin: 0 0 0.9em;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--border);
+  color: color-mix(in srgb, var(--text) 85%, var(--muted));
+}
+
+.visual-doc .v-container {
+  margin: 0.4em 0 1em;
+  padding: 0.6em 0.9em 0.1em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.visual-doc .v-container-label {
+  font-family: system-ui, sans-serif;
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.3em;
+  user-select: none;
+}
+.visual-doc .v-kind-center { text-align: center; border-style: dashed; }
+.visual-doc .v-kind-flush { border-style: dashed; }
+.visual-doc .v-kind-proof .v-container-label { font-style: italic; text-transform: none; font-size: 0.9em; }
+
+/* Beamer: a frame is a slide card, a block a titled box. */
+.visual-doc .v-kind-frame {
+  aspect-ratio: 16 / 9;
+  max-height: none;
+  overflow: auto;
+  padding: 0;
+  margin: 0.6em 0 1.4em;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.15);
+  display: flex;
+  flex-direction: column;
+}
+.visual-doc .v-frame-title {
+  font-family: system-ui, sans-serif;
+  font-weight: 650;
+  font-size: 1.05em;
+  padding: 0.45em 0.9em;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-radius: 10px 10px 0 0;
+  user-select: none;
+}
+.visual-doc .v-frame-title.v-untitled { color: var(--muted); font-weight: 400; font-style: italic; }
+.visual-doc .v-frame-body { padding: 0.7em 1.1em; flex: 1; }
+.visual-doc .v-kind-block {
+  padding: 0;
+  overflow: hidden;
+}
+.visual-doc .v-kind-block > .v-container-label {
+  text-transform: none;
+  font-size: 0.85em;
+  color: var(--text);
+  padding: 0.3em 0.8em;
+  margin: 0;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.visual-doc .v-kind-block.v-env-alertblock > .v-container-label { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+.visual-doc .v-kind-block.v-env-exampleblock > .v-container-label { background: color-mix(in srgb, #3fa66a 20%, transparent); }
+.visual-doc .v-kind-block > .v-container-body { padding: 0.5em 0.8em 0.1em; }
+
+.visual-doc pre[data-node="code_block"] {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--v-code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6em 0.8em;
+  margin: 0 0 0.9em;
+  white-space: pre-wrap;
+}
+.visual-doc pre[data-node="code_block"][data-lang]:not([data-lang=""])::before {
+  content: attr(data-lang);
+  display: block;
+  font-size: 0.75em;
+  color: var(--muted);
+  font-family: system-ui, sans-serif;
+}
+
+/* Marks */
+.visual-doc code { font-family: "Cascadia Code", Consolas, monospace; font-size: 0.88em; }
+.visual-doc span.sc { font-variant: small-caps; }
+.visual-doc span.sf { font-family: system-ui, sans-serif; }
+.visual-doc a[data-href] { color: var(--accent); text-decoration: underline; cursor: text; }
+
+/* Chips and atoms */
+.visual-doc .v-chip {
+  display: inline-block;
+  font-family: system-ui, sans-serif;
+  font-size: 0.78em;
+  line-height: 1.4;
+  padding: 0 0.4em;
+  margin: 0 0.1em;
+  border: 1px solid var(--v-chip-border);
+  border-radius: 4px;
+  background: var(--v-chip-bg);
+  color: var(--text);
+  cursor: pointer;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+.visual-doc .v-chip.v-unknown { border-color: var(--v-warn); background: color-mix(in srgb, var(--v-warn) 16%, transparent); }
+.visual-doc .v-footnote { padding: 0 0.25em; font-size: 0.7em; vertical-align: super; }
+.visual-doc .v-label { color: var(--muted); }
+.visual-doc .v-url { color: var(--accent); text-decoration: underline; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.88em; }
+.visual-doc .v-glyph-empty { display: none; }
+
+.visual-doc .v-math { cursor: pointer; }
+.visual-doc .v-math-inline { padding: 0 0.05em; }
+.visual-doc .v-math-display {
+  display: block;
+  text-align: center;
+  margin: 0.2em 0 0.9em;
+  padding: 0.3em 0;
+  overflow-x: auto;
+  position: relative;
+}
+.visual-doc .v-math-labels { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.visual-doc .v-math-src { font-family: "Cascadia Code", Consolas, monospace; font-size: 0.85em; color: var(--muted); }
+.visual-doc .v-math-error { color: var(--text); text-decoration: underline dotted var(--v-warn); text-underline-offset: 3px; }
+.visual-doc .v-math:hover { background: var(--v-chip-bg); border-radius: 4px; }
+
+.visual-doc .v-raw-block,
+.visual-doc .v-command,
+.visual-doc .v-table,
+.visual-doc .v-preamble {
+  font-family: system-ui, sans-serif;
+  font-size: 0.85em;
+  margin: 0 0 0.9em;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+}
+.visual-doc .v-raw-block { padding: 0.3em 0.7em 0.5em; cursor: pointer; }
+.visual-doc .v-raw-label { font-size: 0.8em; color: var(--muted); margin-bottom: 0.2em; }
+.visual-doc .v-raw-src {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.92em;
+  white-space: pre-wrap;
+  margin: 0;
+  overflow-x: auto;
+}
+.visual-doc .v-raw-inline {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.82em;
+  padding: 0 0.25em;
+  border-radius: 3px;
+  background: var(--v-code-bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.visual-doc .v-command { display: flex; align-items: center; gap: 0.6em; padding: 0.35em 0.7em; cursor: pointer; }
+.visual-doc .v-command-title { font-weight: 600; }
+.visual-doc .v-command-src { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.visual-doc .v-comment {
+  font-style: italic;
+  color: var(--muted);
+  opacity: 0.75;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  margin: 0 0 0.6em;
+  cursor: pointer;
+}
+.v-hide-comments .visual-doc .v-comment { display: none; }
+
+.visual-doc .v-preamble { padding: 0.4em 0.7em; border-style: solid; }
+.visual-doc .v-preamble-head { display: flex; align-items: center; gap: 0.6em; }
+.visual-doc .v-preamble-title { font-weight: 600; white-space: nowrap; }
+.visual-doc .v-preamble-meta { color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visual-doc .v-preamble-head .v-btn { white-space: nowrap; flex-shrink: 0; }
+.visual-doc .v-preamble-fields { display: grid; gap: 0.4em; margin-top: 0.5em; }
+.visual-doc .v-field { display: flex; align-items: center; gap: 0.6em; }
+.visual-doc .v-field-name { width: 4.5em; color: var(--muted); }
+.visual-doc .v-field-input {
+  flex: 1;
+  height: 1.9em;
+  padding: 0 0.5em;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.visual-doc .v-field-input:focus { border-color: var(--accent); }
+.visual-doc .v-muted { color: var(--muted); }
+.visual-doc .v-postamble {
+  font-family: system-ui, sans-serif;
+  font-size: 0.75em;
+  color: var(--muted);
+  text-align: center;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.4em;
+  margin-top: 1.5em;
+  user-select: none;
+}
+
+.visual-doc .v-btn {
+  font-family: system-ui, sans-serif;
+  font-size: 0.8em;
+  padding: 0.1em 0.55em;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.visual-doc .v-btn:hover { background: var(--surface-2); }
+
+.visual-doc .v-figure { margin: 0.4em 0 1.1em; text-align: center; }
+.visual-doc .v-figure-media { display: flex; flex-direction: column; align-items: center; gap: 0.4em; }
+.visual-doc .v-figure-img { max-width: 100%; max-height: 420px; background: #fff; border-radius: 4px; }
+.visual-doc .v-figure-missing {
+  width: 100%;
+  padding: 2em 1em;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: system-ui, sans-serif;
+  font-size: 0.85em;
+}
+.visual-doc .v-figure-bar { display: flex; gap: 0.4em; align-items: center; opacity: 0.6; font-size: 0.85em; }
+.visual-doc .v-figure:hover .v-figure-bar,
+.visual-doc .v-figure.ProseMirror-selectednode .v-figure-bar { opacity: 1; }
+.visual-doc .v-figure-caption { font-size: 0.92em; color: color-mix(in srgb, var(--text) 85%, var(--muted)); margin-top: 0.3em; }
+.visual-doc .v-figure-caption figcaption::before { content: "Figure: "; color: var(--muted); font-family: system-ui, sans-serif; font-size: 0.85em; }
+
+.visual-doc .v-table { padding: 0.4em 0.7em 0.5em; }
+.visual-doc .v-table-bar { display: flex; align-items: center; gap: 0.4em; margin-bottom: 0.4em; }
+.visual-doc .v-spacer { flex: 1; }
+.visual-doc .v-table-grid { border-collapse: collapse; margin: 0 auto; font-family: Georgia, "Times New Roman", serif; font-size: 1.05em; }
+.visual-doc .v-table-grid td { border: 1px solid var(--border); padding: 0.2em 0.6em; }
+.visual-doc .v-table-caption { text-align: center; color: var(--muted); margin-top: 0.4em; }
+
+.visual-doc .v-image { display: inline-block; }
+.visual-doc .v-inline-img { max-width: 100%; max-height: 360px; }
+.visual-doc .v-image.v-missing .v-inline-img { min-width: 6em; min-height: 2em; border: 1px dashed var(--border); }
+
+/* Selection, find, issues, reveal flash */
+.visual-doc .v-selected,
+.visual-doc .ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+.visual-doc .v-find { background: color-mix(in srgb, #f2c94c 40%, transparent); border-radius: 2px; }
+.visual-doc .v-find-current { background: color-mix(in srgb, #f2994a 65%, transparent); }
+.visual-doc .v-issue { box-shadow: -10px 0 0 -7px var(--v-warn); }
+.visual-doc .v-issue-error { box-shadow: -10px 0 0 -7px var(--danger); }
+.visual-doc .v-flash { animation: v-flash 0.6s ease-out; }
+@keyframes v-flash {
+  from { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+  to { background: transparent; }
+}
+
+.visual-doc .ProseMirror-gapcursor::after { border-top-color: var(--text); }
+
+.visual-popover .katex-display { margin: 0.2em 0; }
