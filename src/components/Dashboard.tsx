@@ -22,17 +22,16 @@ import {
   X,
 } from "lucide-react";
 import { api, errorText, type ProjectSummary, type Template } from "../lib/api";
+import { TEMPLATES, TemplateThumb } from "../lib/templates";
 import { filterProjects, formatDate, formatRelative, sortProjects, type SortKey } from "../lib/projects";
 import { useApp } from "../store";
 import { Button, ConfirmDialog, Modal, PromptDialog } from "./Dialog";
 import { ImportDialog, isArchivePath } from "./ImportDialog";
 import { ContextMenu, Menu } from "./Menu";
-import { NewProjectDialog } from "./NewProjectDialog";
-import { fileManagerName, toast, trashName } from "../ui";
+import { fileManagerName, toast, trashName, useUi } from "../ui";
 import { Sidebar } from "./Sidebar";
 
 type DialogState =
-  | { kind: "new"; template: Template }
   | { kind: "import"; file: string | null }
   | { kind: "export"; project: ProjectSummary }
   | { kind: "rename"; project: ProjectSummary }
@@ -63,6 +62,7 @@ async function exportZip(project: ProjectSummary, includePdf: boolean) {
 export function Dashboard() {
   const app = useApp();
   const [dialog, setDialog] = useState<DialogState>(null);
+  const openNewProject = useUi((s) => s.openNewProject);
   const [menu, setMenu] = useState<{ x: number; y: number; project: ProjectSummary } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const onContext = (e: React.MouseEvent, project: ProjectSummary) => {
@@ -129,7 +129,7 @@ export function Dashboard() {
       const key = e.key.toLowerCase();
       if (e.ctrlKey && key === "n") {
         e.preventDefault();
-        setDialog({ kind: "new", template: "example" });
+        openNewProject();
       } else if (e.ctrlKey && e.shiftKey && key === "o") {
         e.preventDefault();
         setDialog({ kind: "import", file: null });
@@ -193,9 +193,9 @@ export function Dashboard() {
       items={[
         {
           label: "New project…",
-          hint: "Blank, paper, report, slides or thesis (Ctrl+N)",
+          hint: "Papers, thesis, slides, notes, letters and more (Ctrl+N)",
           icon: <FileText size={15} />,
-          onSelect: () => setDialog({ kind: "new", template: "example" }),
+          onSelect: () => openNewProject(),
         },
         {
           label: "Import .zip or .tar.gz…",
@@ -269,7 +269,7 @@ export function Dashboard() {
             <p className="text-muted">Loading projects…</p>
           ) : app.projects.length === 0 ? (
             <EmptyState
-              onNew={() => setDialog({ kind: "new", template: "example" })}
+              onPick={(template) => openNewProject(template)}
               onOpen={openFolder}
               onImport={() => setDialog({ kind: "import", file: null })}
             />
@@ -284,7 +284,6 @@ export function Dashboard() {
       </main>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={actionsFor(menu.project)} onClose={closeMenu} />}
-      {dialog?.kind === "new" && <NewProjectDialog initial={dialog.template} onClose={() => setDialog(null)} />}
       {dialog?.kind === "import" && <ImportDialog file={dialog.file} onClose={() => setDialog(null)} />}
       {dialog?.kind === "export" && (
         <ExportDialog project={dialog.project} onClose={() => setDialog(null)} />
@@ -497,30 +496,62 @@ function ExportDialog({ project, onClose }: { project: ProjectSummary; onClose: 
   );
 }
 
-function EmptyState({ onNew, onOpen, onImport }: { onNew: () => void; onOpen: () => void; onImport: () => void }) {
+/** The first screen: every template as a card, plus the ways to bring in
+ * an existing project. */
+function EmptyState({
+  onPick,
+  onOpen,
+  onImport,
+}: {
+  onPick: (template: Template) => void;
+  onOpen: () => void;
+  onImport: () => void;
+}) {
   return (
-    <div className="flex flex-col items-center py-24 text-center">
-      <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-surface-2 text-accent">
-        <FileText size={26} />
-      </div>
-      <h2 className="text-base font-semibold">No projects yet</h2>
-      <p className="mt-1 max-w-sm text-muted">
-        Start from an example paper, or open a folder that already has your LaTeX files.
+    <div className="mx-auto max-w-5xl py-6">
+      <h2 className="text-xl font-semibold">Start a new project</h2>
+      <p className="mt-1 text-muted">
+        Pick a template to begin. Each one is a plain folder of LaTeX files you can change however you like.
       </p>
-      <div className="mt-5 flex gap-2">
-        <Button variant="primary" onClick={onNew}>
-          <Plus size={16} /> New example project
-        </Button>
-        <Button onClick={onOpen}>
-          <FolderInput size={16} /> Open folder
-        </Button>
-      </div>
-      <div className="mt-8 flex max-w-md items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 text-left">
-        <FileArchive size={20} className="shrink-0 text-accent" />
-        <p className="flex-1 text-sm text-muted">
-          Moving from another LaTeX editor? Download your project as a .zip and import it here.
-        </p>
-        <Button onClick={onImport}>Import</Button>
+
+      <ul className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-4" aria-label="Templates">
+        {TEMPLATES.map((t) => (
+          <li key={t.id} className="flex">
+            <button
+              type="button"
+              onClick={() => onPick(t.id)}
+              className="group flex w-full flex-col overflow-hidden rounded-xl border border-border bg-surface text-left transition-colors hover:border-accent/60 focus-visible:border-accent"
+            >
+              <span className="flex aspect-[16/11] w-full items-center justify-center bg-surface-2 transition-colors group-hover:bg-accent/10">
+                <TemplateThumb
+                  template={t.id}
+                  className="h-[86%] w-auto transition-transform duration-150 group-hover:-translate-y-0.5 motion-reduce:transition-none"
+                />
+              </span>
+              <span className="flex flex-1 flex-col gap-0.5 px-3 py-2.5">
+                <span className="text-[10px] font-medium tracking-wide text-muted uppercase">{t.category}</span>
+                <span className="font-medium">{t.title}</span>
+                <span className="text-xs leading-snug text-muted">{t.description}</span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <h3 className="mt-10 text-sm font-semibold">Already have a project?</h3>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
+          <FolderInput size={20} className="shrink-0 text-accent" />
+          <p className="flex-1 text-sm text-muted">Open a folder that already has your LaTeX files.</p>
+          <Button onClick={onOpen}>Open folder</Button>
+        </div>
+        <div className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
+          <FileArchive size={20} className="shrink-0 text-accent" />
+          <p className="flex-1 text-sm text-muted">
+            Moving from another LaTeX editor? Download your project as a .zip and import it here.
+          </p>
+          <Button onClick={onImport}>Import</Button>
+        </div>
       </div>
     </div>
   );

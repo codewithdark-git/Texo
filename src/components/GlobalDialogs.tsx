@@ -6,6 +6,7 @@ import { useApp } from "../store";
 import { trashName, useUi } from "../ui";
 import { WordCountDialog } from "../workspace/WordCountDialog";
 import { Button, Modal } from "./Dialog";
+import { NewProjectDialog } from "./NewProjectDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import { Logo } from "./Sidebar";
 
@@ -149,6 +150,7 @@ function AboutDialog({ onClose }: { onClose: () => void }) {
 export function GlobalDialogs() {
   const dialog = useUi((s) => s.dialog);
   const openDialog = useUi((s) => s.openDialog);
+  const newTemplate = useUi((s) => s.newTemplate);
   const close = () => openDialog(null);
 
   useEffect(() => {
@@ -169,5 +171,6 @@ export function GlobalDialogs() {
   if (dialog === "about") return <AboutDialog onClose={close} />;
   if (dialog === "settings") return <SettingsDialog onClose={close} />;
   if (dialog === "wordCount") return <WordCountDialog onClose={close} />;
+  if (dialog === "newProject") return <NewProjectDialog initial={newTemplate} onClose={close} />;
   return null;
 }

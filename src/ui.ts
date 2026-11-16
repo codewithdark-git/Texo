@@ -1,5 +1,6 @@
 // App-wide UI state: short confirmation toasts and the global dialogs.
 import { create } from "zustand";
+import type { Template } from "./lib/api";
 
 export type ToastKind = "success" | "info" | "error";
 
@@ -9,14 +10,25 @@ export interface Toast {
   text: string;
 }
 
-export type GlobalDialog = "shortcuts" | "about" | "quickOpen" | "settings" | "wordCount" | null;
+export type GlobalDialog =
+  | "shortcuts"
+  | "about"
+  | "quickOpen"
+  | "settings"
+  | "wordCount"
+  | "newProject"
+  | null;
 
 interface UiStore {
   toasts: Toast[];
   dialog: GlobalDialog;
+  /** The template the "newProject" dialog starts on; unset means the last one used. */
+  newTemplate?: Template;
   toast: (text: string, kind?: ToastKind) => void;
   dismissToast: (id: number) => void;
   openDialog: (dialog: GlobalDialog) => void;
+  /** Opens the template gallery, optionally with `template` selected. */
+  openNewProject: (template?: Template) => void;
 }
 
 let nextId = 1;
@@ -33,6 +45,7 @@ export const useUi = create<UiStore>((set, get) => ({
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   openDialog: (dialog) => set({ dialog }),
+  openNewProject: (newTemplate) => set({ dialog: "newProject", newTemplate }),
 }));
 
 /** Shorthand for components and stores that just want to say something. */

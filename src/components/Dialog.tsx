@@ -1,18 +1,51 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 interface ModalProps {
   title: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  /** Wider still, for galleries. */
+  extraWide?: boolean;
 }
 
-export function Modal({ title, children, onClose, wide }: ModalProps) {
+export function Modal({ title, children, onClose, wide, extraWide }: ModalProps) {
+  const panel = useRef<HTMLDivElement>(null);
+  // Read during the first render, before autoFocus moves focus into the dialog.
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Give focus back to whatever opened the dialog once it closes.
+  useEffect(
+    () => () => {
+      if (opener?.isConnected) opener.focus();
+    },
+    [opener],
+  );
+
+  // Keep Tab inside the dialog instead of reaching the page behind it.
+  const trapTab = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab" || !panel.current) return;
+    const focusable = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+      (el) => !el.hasAttribute("disabled") && el.tabIndex >= 0 && el.offsetParent !== null,
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !panel.current.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !panel.current.contains(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   return (
     <div
@@ -20,10 +53,12 @@ export function Modal({ title, children, onClose, wide }: ModalProps) {
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
+        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`texo-pop w-full rounded-xl border border-border bg-surface p-5 shadow-2xl ${wide ? "max-w-2xl" : "max-w-md"}`}
+        onKeyDown={trapTab}
+        className={`texo-pop max-h-[calc(100vh-2rem)] w-full overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-2xl ${extraWide ? "max-w-5xl" : wide ? "max-w-2xl" : "max-w-md"}`}
       >
         <h2 className="mb-4 text-base font-semibold">{title}</h2>
         {children}
@@ -31,6 +66,8 @@ export function Modal({ title, children, onClose, wide }: ModalProps) {
     </div>
   );
 }
+
+const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 export function Button({
   variant = "secondary",

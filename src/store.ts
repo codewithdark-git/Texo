@@ -78,7 +78,8 @@ interface AppStore extends Prefs {
   dismissError: () => void;
   open: (project: ProjectSummary | null) => void;
 
-  createProject: (name: string, template: Template) => Promise<void>;
+  /** Creates a project from a template and opens it; false if it failed. */
+  createProject: (name: string, template: Template) => Promise<boolean>;
   openFolder: (path: string) => Promise<void>;
   /** Imports a .zip or .tar.gz as a new project and opens it. */
   importProject: (archivePath: string, name: string, main: string | null) => Promise<boolean>;
@@ -182,7 +183,9 @@ export const useApp = create<AppStore>((set, get) => {
 
     createProject: async (name, template) => {
       const created = await act(() => api.createProject(name, template));
-      if (created) set({ openProject: created });
+      if (!created) return false;
+      set({ openProject: created });
+      return true;
     },
     openFolder: async (path) => {
       const opened = await act(() => api.openFolder(path));

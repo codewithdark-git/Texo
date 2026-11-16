@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Engine = "pdflatex" | "xelatex" | "lualatex";
-export type Template = "blank" | "example" | "report" | "presentation" | "thesis";
+export type Template = "blank" | "example" | "conference" | "report" | "thesis" | "lecture" | "homework" | "presentation" | "letter" | "cv";
 
 export type Compiler = "auto" | "latexmk" | "direct" | "tectonic";
 
