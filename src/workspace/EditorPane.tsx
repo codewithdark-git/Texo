@@ -1,65 +1,61 @@
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AlertTriangle, FileQuestion, FolderOpen, Loader2 } from "lucide-react";
 import { monaco } from "../editor/monaco";
 import { Button } from "../components/Dialog";
+import { DEFAULT_EDITOR_PREFS, getEditorPrefs, onEditorPrefs, setEditorPrefs } from "../lib/editorPrefs";
+import { fileManagerName, toast } from "../ui";
 import { useCompile } from "./compileStore";
+import { getActiveEditor, setCodeEditor, showsVisual, toggleMode, type ActiveEditor } from "./editorBridge";
 import { syncToPdf } from "./PdfViewer";
 import { nativePath } from "./paths";
-import { getModel, savedCursor, useWorkspace } from "./store";
+import { getModel, savedCursor, useWorkspace, visualSupported } from "./store";
+
+const loadVisual = () => import("../visual/VisualPane");
+const VisualPane = lazy(loadVisual);
 
 /** Lets other panels (outline, search) move the editor's cursor. */
 export const editorBridge: { editor: monaco.editor.IStandaloneCodeEditor | null } = { editor: null };
 
-/** Opens a project file and moves the cursor to a line. */
+/** Opens a project file and moves the cursor to a line, in whichever mode the file shows. */
 export async function revealSource(file: string, line: number) {
   const ws = useWorkspace.getState();
   ws.expandTo(file);
   await ws.openFile(file);
-  // Let the editor switch models before moving the cursor.
-  setTimeout(() => revealLine(line), 30);
+  // Let the editor switch files (and Visual mode load) before moving the cursor.
+  let tries = 0;
+  const go = () => {
+    const ed = getActiveEditor();
+    if (ed && (ed.path === file || tries >= 20)) ed.revealLine(line);
+    else {
+      tries++;
+      setTimeout(go, 30);
+    }
+  };
+  setTimeout(go, 30);
 }
 
 export function revealLine(line: number) {
-  const ed = editorBridge.editor;
-  if (!ed) return;
-  ed.revealLineInCenter(line);
-  ed.setPosition({ lineNumber: line, column: 1 });
-  ed.focus();
+  getActiveEditor()?.revealLine(line);
 }
 
-const PREFS_KEY = "texo.editor";
-const DEFAULT_FONT_SIZE = 14;
-
-interface EditorPrefs {
-  wordWrap: boolean;
-  fontSize: number;
+/** Visual mode's text size follows the code editor's (16 px for the default 14 px). */
+function applyVisualFontSize(fontSize: number) {
+  document.documentElement.style.setProperty("--visual-font-size", `${Math.round((fontSize * 8) / 7)}px`);
 }
 
-function loadPrefs(): EditorPrefs {
-  try {
-    return { wordWrap: true, fontSize: DEFAULT_FONT_SIZE, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") };
-  } catch {
-    return { wordWrap: true, fontSize: DEFAULT_FONT_SIZE };
-  }
-}
-
-function savePrefs(patch: Partial<EditorPrefs>) {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...patch }));
-  } catch {
-    // Not important enough to report.
-  }
+/** Changes the shared font size; both editors pick it up from the prefs listener. */
+export function zoomBy(step: 1 | -1 | 0) {
+  const current = getEditorPrefs().fontSize;
+  const fontSize = step === 0 ? DEFAULT_EDITOR_PREFS.fontSize : Math.min(32, Math.max(9, current + step));
+  setEditorPrefs({ fontSize });
 }
 
 /** Ctrl+= / Ctrl+- / Ctrl+0: change the editor's font size, and remember it. */
 export function zoomEditor(step: 1 | -1 | 0) {
-  const ed = editorBridge.editor;
-  if (!ed) return;
-  const current = ed.getOption(monaco.editor.EditorOption.fontSize);
-  const fontSize = step === 0 ? DEFAULT_FONT_SIZE : Math.min(32, Math.max(9, current + step));
-  ed.updateOptions({ fontSize, lineHeight: Math.round(fontSize * 1.6) });
-  savePrefs({ fontSize });
+  const ed = getActiveEditor();
+  if (ed) ed.zoom(step);
+  else zoomBy(step);
 }
 
 function formatSize(bytes: number): string {
@@ -78,15 +74,20 @@ export function EditorPane() {
   const view = useWorkspace((s) => (s.active ? s.views[s.active] : undefined));
   const conflict = useWorkspace((s) => (s.active ? s.status[s.active]?.conflict : false));
   const project = useWorkspace((s) => s.project);
+  const modes = useWorkspace((s) => s.modes);
+  const showEditor = view?.kind === "text";
+  const visual = showEditor && showsVisual(active, modes);
 
   useEffect(() => {
+    const prefs = getEditorPrefs();
+    applyVisualFontSize(prefs.fontSize);
     const editor = monaco.editor.create(container.current!, {
       model: null,
       automaticLayout: true,
       fontFamily: "'Cascadia Code', Consolas, monospace",
-      fontSize: loadPrefs().fontSize,
-      lineHeight: Math.round(loadPrefs().fontSize * 1.6),
-      wordWrap: loadPrefs().wordWrap ? "on" : "off",
+      fontSize: prefs.fontSize,
+      lineHeight: Math.round(prefs.fontSize * 1.6),
+      wordWrap: prefs.wordWrap ? "on" : "off",
       minimap: { enabled: false },
       stickyScroll: { enabled: true },
       scrollBeyondLastLine: false,
@@ -100,6 +101,30 @@ export function EditorPane() {
     });
     editorRef.current = editor;
     editorBridge.editor = editor;
+    const asActive: ActiveEditor = {
+      get path() {
+        const p = useWorkspace.getState().active;
+        return p && editor.getModel() && !showsVisual(p) ? p : null;
+      },
+      revealLine(line) {
+        editor.revealLineInCenter(line);
+        editor.setPosition({ lineNumber: line, column: 1 });
+        editor.focus();
+      },
+      getLine: () => editor.getPosition()?.lineNumber ?? null,
+      focus: () => editor.focus(),
+      zoom: zoomBy,
+    };
+    setCodeEditor(asActive, editor);
+    // Settings and zoom change these live.
+    const stopPrefs = onEditorPrefs((p) => {
+      editor.updateOptions({
+        fontSize: p.fontSize,
+        lineHeight: Math.round(p.fontSize * 1.6),
+        wordWrap: p.wordWrap ? "on" : "off",
+      });
+      applyVisualFontSize(p.fontSize);
+    });
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       const path = useWorkspace.getState().active;
@@ -123,8 +148,7 @@ export function EditorPane() {
       keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.KeyZ],
       run: (ed) => {
         const on = ed.getOption(monaco.editor.EditorOption.wordWrap) !== "on";
-        ed.updateOptions({ wordWrap: on ? "on" : "off" });
-        savePrefs({ wordWrap: on });
+        setEditorPrefs({ wordWrap: on });
       },
     });
     editor.addAction({
@@ -137,16 +161,62 @@ export function EditorPane() {
       id: "texo.italic",
       label: "Italic",
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI],
-      run: (ed) => wrapSelection(ed, "\\textit{", "}"),
+      // The same mapping as Visual mode's Ctrl+I and *x*: emphasis.
+      run: (ed) => wrapSelection(ed, "\\emph{", "}"),
     });
-    editor.onDidChangeCursorPosition((e) =>
-      useWorkspace.getState().setCursor({ line: e.position.lineNumber, column: e.position.column }),
-    );
+    editor.addAction({
+      id: "texo.verifyVisual",
+      label: "Texo: Verify Visual round trip",
+      run: async (ed) => {
+        const model = ed.getModel();
+        const path = useWorkspace.getState().active;
+        if (!model || !path) return;
+        const core = await import("../visual/core");
+        const dialect = core.dialectFor(path);
+        if (!dialect) {
+          toast("Visual mode works with .tex and .md files", "info");
+          return;
+        }
+        const res = core.createSession(dialect, model.getValue()).verify();
+        if (res.ok) toast("Visual round trip is exact for this file");
+        else {
+          const at = model.getPositionAt(res.offset);
+          console.warn("Visual round trip differs", res);
+          toast(`Visual round trip differs at line ${at.lineNumber}, column ${at.column}`, "error");
+        }
+      },
+    });
+    editor.onDidChangeCursorPosition((e) => {
+      // While Visual mode is in front it reports the cursor itself.
+      if (showsVisual(useWorkspace.getState().active)) return;
+      useWorkspace.getState().setCursor({ line: e.position.lineNumber, column: e.position.column });
+    });
+
+    // Load Visual mode in the background so the first switch is instant.
+    const idle = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 1500));
+    idle(() => void loadVisual().catch(() => {}));
 
     return () => {
+      stopPrefs();
+      setCodeEditor(null, null);
       editorBridge.editor = null;
       editor.dispose();
     };
+  }, []);
+
+  // Ctrl+Shift+E switches the active file between Code and Visual, from anywhere.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "e") return;
+      const ws = useWorkspace.getState();
+      const path = ws.active;
+      if (!path || !visualSupported(path) || ws.views[path]?.kind !== "text") return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleMode(path);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   useEffect(() => {
@@ -165,20 +235,31 @@ export function EditorPane() {
         editor.setPosition({ lineNumber: remembered.line, column: remembered.column });
         editor.revealPositionInCenterIfOutsideViewport({ lineNumber: remembered.line, column: remembered.column });
       }
-      editor.focus();
-      const pos = editor.getPosition();
-      useWorkspace.getState().setCursor(pos ? { line: pos.lineNumber, column: pos.column } : null);
+      if (!showsVisual(active)) {
+        editor.focus();
+        const pos = editor.getPosition();
+        useWorkspace.getState().setCursor(pos ? { line: pos.lineNumber, column: pos.column } : null);
+      }
     } else {
       useWorkspace.getState().setCursor(null);
     }
   }, [active, view?.kind]);
 
-  const showEditor = view?.kind === "text";
-
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {showEditor && conflict && active && <ConflictBar path={active} />}
-      <div ref={container} className={`min-h-0 flex-1 ${showEditor ? "" : "invisible"}`} />
+      <div ref={container} className={`min-h-0 flex-1 ${visual ? "hidden" : showEditor ? "" : "invisible"}`} />
+      {visual && active && (
+        <Suspense
+          fallback={
+            <div className="flex min-h-0 flex-1 items-center justify-center text-muted">
+              <Loader2 className="animate-spin" />
+            </div>
+          }
+        >
+          <VisualPane path={active} />
+        </Suspense>
+      )}
 
       {!showEditor && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-auto p-6 text-center text-muted">
@@ -207,7 +288,7 @@ export function EditorPane() {
               </p>
               {project && active && (
                 <Button onClick={() => void revealItemInDir(nativePath(project.path, active))}>
-                  <FolderOpen size={15} /> Show in File Explorer
+                  <FolderOpen size={15} /> Show in {fileManagerName}
                 </Button>
               )}
             </>

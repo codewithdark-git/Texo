@@ -13,9 +13,26 @@ import {
 import { completionSource } from "../editor/completions";
 import { languageFor, monaco } from "../editor/monaco";
 import { baseName, isWithin, joinPath, parentDir, rebase } from "./paths";
-import { toast } from "../ui";
+import { toast, trashName } from "../ui";
+import { getEditorPrefs } from "../lib/editorPrefs";
 
 const AUTOSAVE_MS = 800;
+
+export type EditorMode = "code" | "visual";
+
+/** Files that Visual mode can show: LaTeX and Markdown. */
+export function visualSupported(path: string): boolean {
+  return /\.(tex|ltx|md|markdown)$/i.test(path);
+}
+
+/** The mode a file opens in: what the user last chose for it, else the default for its kind. */
+export function modeFor(path: string, modes: Record<string, EditorMode> = useWorkspace.getState().modes): EditorMode {
+  const chosen = modes[path];
+  if (chosen) return chosen;
+  if (/\.(md|markdown)$/i.test(path)) return getEditorPrefs().defaultMdMode;
+  if (/\.(tex|ltx)$/i.test(path)) return getEditorPrefs().defaultTexMode;
+  return "code";
+}
 
 export type FileView =
   | { kind: "loading" }
@@ -42,6 +59,8 @@ interface WorkspaceStore {
   saving: number;
   error: string | null;
   cursor: { line: number; column: number } | null;
+  /** Code or Visual, per file the user has switched. */
+  modes: Record<string, EditorMode>;
 
   init: (project: ProjectSummary) => Promise<void>;
   teardown: () => Promise<void>;
@@ -62,6 +81,7 @@ interface WorkspaceStore {
   collapseAll: () => void;
   setCursor: (cursor: { line: number; column: number } | null) => void;
   setError: (error: string | null) => void;
+  setMode: (path: string, mode: EditorMode) => void;
 }
 
 // Monaco models and save bookkeeping live outside React state.
@@ -79,6 +99,8 @@ interface SavedSession {
   tabs: string[];
   active: string | null;
   cursors: Record<string, { line: number; column: number }>;
+  /** Added in v1.0; older sessions don't have it. */
+  modes?: Record<string, EditorMode>;
 }
 
 const sessionKey = (projectId: string) => `texo.session.${projectId}`;
@@ -113,6 +135,21 @@ export function getModel(path: string): monaco.editor.ITextModel | undefined {
   return models.get(path);
 }
 
+const disposeListeners = new Set<(path: string) => void>();
+
+/** Runs `fn` whenever a file's model goes away (tab closed, file renamed or deleted, project closed). */
+export function onModelDispose(fn: (path: string) => void): () => void {
+  disposeListeners.add(fn);
+  return () => void disposeListeners.delete(fn);
+}
+
+/** What a saved session stores: tabs, the active tab, cursors, and modes of open files. */
+function sessionSnapshot(state: { tabs: string[]; active: string | null; modes: Record<string, EditorMode> }): SavedSession {
+  const { tabs, active, modes } = state;
+  const cursors = Object.fromEntries(Object.entries(savedCursors).filter(([p]) => tabs.includes(p)));
+  return { tabs, active, cursors, modes: Object.fromEntries(Object.entries(modes).filter(([p]) => tabs.includes(p))) };
+}
+
 const uriFor = (path: string) => monaco.Uri.from({ scheme: "texo", path: `/${path}` });
 const isSymbolSource = (path: string) => /\.(tex|bib|sty|cls)$/i.test(path);
 
@@ -139,15 +176,14 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     for (const path of [...models.keys()]) disposeModel(path);
     completionSource.symbols = { labels: [], citations: [], commands: [] };
     completionSource.files = [];
-    set({ project: null, files: [], tabs: [], active: null, views: {}, status: {}, cursor: null });
+    set({ project: null, files: [], tabs: [], active: null, views: {}, status: {}, cursor: null, modes: {} });
   }
 
   function saveSession() {
-    const { project, tabs, active } = get();
+    const { project } = get();
     if (!project) return;
-    const cursors = Object.fromEntries(Object.entries(savedCursors).filter(([p]) => tabs.includes(p)));
     try {
-      localStorage.setItem(sessionKey(project.id), JSON.stringify({ tabs, active, cursors } satisfies SavedSession));
+      localStorage.setItem(sessionKey(project.id), JSON.stringify(sessionSnapshot(get())));
     } catch {
       // Not worth bothering the user about.
     }
@@ -199,13 +235,27 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     models.delete(path);
     savedVersion.delete(path);
     lastWritten.delete(path);
+    disposeListeners.forEach((fn) => fn(path));
   }
 
   /** Replaces the editor text with the disk version, keeping undo history. */
   function applyDiskVersion(path: string, text: string) {
     const model = models.get(path);
     if (!model) return;
-    model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+    // Replace only the part that differs, so Visual mode and decorations stay
+    // put and an unchanged file makes no edit at all.
+    const old = model.getValue();
+    if (old !== text) {
+      const max = Math.min(old.length, text.length);
+      let start = 0;
+      while (start < max && old.charCodeAt(start) === text.charCodeAt(start)) start++;
+      let tail = 0;
+      while (tail < max - start && old.charCodeAt(old.length - 1 - tail) === text.charCodeAt(text.length - 1 - tail)) tail++;
+      const from = model.getPositionAt(start);
+      const to = model.getPositionAt(old.length - tail);
+      const range = { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column };
+      model.pushEditOperations([], [{ range, text: text.slice(start, text.length - tail) }], () => null);
+    }
     savedVersion.set(path, model.getAlternativeVersionId());
     setStatus(path, { dirty: false, conflict: false });
   }
@@ -279,6 +329,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     saving: 0,
     error: null,
     cursor: null,
+    modes: {},
 
     init: async (project) => {
       // A newer init (or a teardown) makes this one stale: stop as soon as we notice.
@@ -288,7 +339,17 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       const session = loadSession(project.id);
       await closeProject();
       if (stale()) return;
-      set({ project, files: [], tabs: [], active: null, views: {}, status: {}, expanded: {}, error: null });
+      set({
+        project,
+        files: [],
+        tabs: [],
+        active: null,
+        views: {},
+        status: {},
+        expanded: {},
+        error: null,
+        modes: session?.modes && typeof session.modes === "object" ? session.modes : {},
+      });
       try {
         await get().refreshFiles();
         if (stale()) return;
@@ -445,6 +506,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
           views: moveKeys(s.views),
           status: moveKeys(s.status),
           expanded: moveKeys(s.expanded),
+          modes: moveKeys(s.modes),
         }));
         const main = get().project?.mainDocument;
         if (main && isWithin(main, from)) {
@@ -464,7 +526,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         dropTabs((p) => isWithin(p, path));
         await api.deletePath(projectPath(), path);
         await get().refreshFiles();
-        toast(`Moved “${baseName(path)}” to the Recycle Bin`);
+        toast(`Moved “${baseName(path)}” to the ${trashName}`);
         afterChange?.(path);
       } catch (err) {
         fail(err);
@@ -512,19 +574,26 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       scheduleSession();
     },
     setError: (error) => set({ error }),
+    setMode: (path, mode) => {
+      set((s) => ({ modes: { ...s.modes, [path]: mode } }));
+      scheduleSession();
+    },
   };
 });
 
 // Remember tabs whenever they change.
 useWorkspace.subscribe((state, prev) => {
-  if (sessionReady && state.project && (state.tabs !== prev.tabs || state.active !== prev.active)) {
+  if (
+    sessionReady &&
+    state.project &&
+    (state.tabs !== prev.tabs || state.active !== prev.active || state.modes !== prev.modes)
+  ) {
     clearTimeout(sessionTimer);
     sessionTimer = setTimeout(() => {
-      const { project, tabs, active } = useWorkspace.getState();
-      if (!project) return;
-      const cursors = Object.fromEntries(Object.entries(savedCursors).filter(([p]) => tabs.includes(p)));
+      const current = useWorkspace.getState();
+      if (!current.project) return;
       try {
-        localStorage.setItem(sessionKey(project.id), JSON.stringify({ tabs, active, cursors }));
+        localStorage.setItem(sessionKey(current.project.id), JSON.stringify(sessionSnapshot(current)));
       } catch {
         // Not worth bothering the user about.
       }

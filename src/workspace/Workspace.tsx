@@ -22,6 +22,7 @@ import { Outline } from "./Outline";
 import { SearchPanel } from "./SearchPanel";
 import { TabBar } from "./TabBar";
 import { useWorkspace } from "./store";
+import { showsVisual } from "./editorBridge";
 
 type Layout = "split" | "code" | "pdf";
 type Panel = "files" | "outline" | "search";
@@ -376,13 +377,17 @@ function StatusBar() {
   const compiling = useCompile((s) => s.compiling);
   const unsaved = Object.values(status).some((s) => s.dirty);
   const conflict = active ? status[active]?.conflict : false;
-  const lang = active?.match(/\.(tex|bib|sty|cls)$/i)?.[1].toLowerCase();
+  const modes = useWorkspace((s) => s.modes);
+  const lang = active?.match(/\.(tex|bib|sty|cls|md|markdown)$/i)?.[1].toLowerCase();
+  const langLabel =
+    (lang === "bib" ? "BibTeX" : lang === "md" || lang === "markdown" ? "Markdown" : lang ? "LaTeX" : active ? "Plain text" : "") +
+    (showsVisual(active, modes) ? " · Visual" : "");
   return (
     <div className="flex h-6 shrink-0 items-center gap-4 border-t border-border bg-surface/60 px-3 text-[11px] text-muted">
       <span>{conflict ? "Changed on disk" : saving > 0 ? "Saving…" : unsaved ? "Unsaved changes" : "All changes saved"}</span>
       {project?.mainDocument && <span>Main: {project.mainDocument}</span>}
       {compiling ? <span>Compiling…</span> : compiledAgo && <span title="Last compile">Compiled {compiledAgo}</span>}
-      <span className="ml-auto">{lang === "bib" ? "BibTeX" : lang ? "LaTeX" : active ? "Plain text" : ""}</span>
+      <span className="ml-auto">{langLabel}</span>
       {words !== null && (
         <button
           type="button"
