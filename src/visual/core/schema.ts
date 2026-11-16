@@ -169,8 +169,11 @@ function mark(name: string, tag: string, cls: string | null, inclusive: boolean)
       };
       if (cls) attrs.class = cls;
       if (isLink) {
+        // Never render a live href: a document could hold `javascript:` or
+        // other unsafe URLs. The UI opens links through a click handler that
+        // allows only http(s) and mailto, in the user's browser.
         attrs["data-href"] = m.attrs.href;
-        attrs.href = m.attrs.href;
+        attrs.title = m.attrs.href;
       }
       return [tag, attrs, 0];
     },

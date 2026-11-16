@@ -347,6 +347,12 @@ const CONTAINERS: Record<string, string> = {
   flushright: "flush",
   abstract: "abstract",
   proof: "proof",
+  // Beamer: a slide and its highlighted boxes. Their title arguments stay in
+  // `begin`, so they round-trip untouched.
+  frame: "frame",
+  block: "block",
+  alertblock: "block",
+  exampleblock: "block",
 };
 
 function rawBlock(src: string, label: string): PMNode {

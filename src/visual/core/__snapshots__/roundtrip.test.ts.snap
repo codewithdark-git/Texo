@@ -19,12 +19,12 @@ exports[`golden corpus round trip > ./__fixtures__/article-amsmath.tex tiles byt
 exports[`golden corpus round trip > ./__fixtures__/beamer.tex tiles byte for byte 1`] = `
 {
   "counts": {
+    "container": 3,
     "heading": 1,
     "postamble": 1,
     "preamble": 1,
-    "raw_block": 3,
   },
-  "rawRatio": 0.75,
+  "rawRatio": 0,
 }
 `;
 

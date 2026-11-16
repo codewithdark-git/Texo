@@ -42,9 +42,15 @@ describe("golden corpus round trip", () => {
   }
 
   for (const [path, text] of Object.entries(templates)) {
-    it(`template ${path} round-trips with no raw blocks`, () => {
+    it(`template ${path} round-trips with no raw blocks except image placeholders`, () => {
       tiled(text, "latex");
-      expect(createSession("latex", text).rawRatio).toBe(0);
+      // A figure without an image (a placeholder box) stays raw until the
+      // user adds a picture; nothing else may.
+      const raw: string[] = [];
+      createSession("latex", text).doc.forEach((n) => {
+        if (n.type.name === "raw_block" && n.attrs.label !== "Figure") raw.push(String(n.attrs.src).slice(0, 60));
+      });
+      expect(raw).toEqual([]);
     });
   }
 
