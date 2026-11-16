@@ -41,7 +41,19 @@ function stream(node: PMNode): Seg[] {
   return out;
 }
 
+/** Drops spaces at the very end of a block's text: they don't show, in TeX or Markdown. */
+function trimEnd(segs: Seg[]): Seg[] {
+  const last = segs[segs.length - 1];
+  if (!last || last.kind !== "text" || !/[ \t]$/.test(last.text)) return segs;
+  const text = last.text.replace(/[ \t]+$/, "");
+  const out = segs.slice(0, -1);
+  if (text) out.push({ ...last, text });
+  return out;
+}
+
 function sameStream(a: Seg[], b: Seg[]): boolean {
+  a = trimEnd(a);
+  b = trimEnd(b);
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const x = a[i];
@@ -54,8 +66,16 @@ function sameStream(a: Seg[], b: Seg[]): boolean {
 }
 
 function sameAttrs(a: PMNode, b: PMNode): boolean {
+  const item = a.type.name === "list_item";
   for (const k of Object.keys(a.attrs)) {
     if (IGNORED_ATTRS.has(k)) continue;
+    // An item marker's trailing space and continuation indent are spelling:
+    // an empty item parses as "\item" (or "-") with the space in the gap.
+    if (item && k === "indent") continue;
+    if (item && k === "head") {
+      if (String(a.attrs.head).trimEnd() !== String(b.attrs.head).trimEnd()) return false;
+      continue;
+    }
     const x = a.attrs[k];
     const y = b.attrs[k];
     if (k === "src" && a.isAtom) {
@@ -74,7 +94,19 @@ export function semEq(a: PMNode, b: PMNode): boolean {
   if (!sameAttrs(a, b)) return false;
   if (a.isTextblock && !a.type.spec.code) return sameStream(stream(a), stream(b));
   if (a.type.spec.code) return a.textContent === b.textContent;
-  if (a.childCount !== b.childCount) return false;
-  for (let i = 0; i < a.childCount; i++) if (!semEq(a.child(i), b.child(i))) return false;
+  // An empty paragraph inside a quote or item (Enter at its end) writes no
+  // text and parses back as nothing: it is where the next words will go.
+  const x = blockKids(a);
+  const y = blockKids(b);
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (!semEq(x[i], y[i])) return false;
   return true;
+}
+
+function blockKids(node: PMNode): PMNode[] {
+  const out: PMNode[] = [];
+  node.forEach((child) => {
+    if (!(child.type.name === "paragraph" && child.content.size === 0)) out.push(child);
+  });
+  return out;
 }

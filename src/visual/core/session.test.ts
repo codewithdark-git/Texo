@@ -253,6 +253,86 @@ describe("session edits", () => {
     expect(s.parseSnippet("{unclosed").child(0).type.name).toBe("raw_block");
   });
 
+  it("types a space at the end of a paragraph, then the next word", () => {
+    for (const [dialect, text] of [
+      ["latex", BODY],
+      ["markdown", "# Intro\n\nHello world, this is text.\n\nSecond paragraph here.\n"],
+    ] as const) {
+      const s = createSession(dialect, text);
+      const end = posOf(s.doc, "text.") + 5;
+      change(s, ins(new Transform(s.doc), " ", end).doc);
+      expect(s.text).toBe(text.replace("text.", "text. "));
+      change(s, ins(new Transform(s.doc), "More", end + 1).doc);
+      expect(s.text).toBe(text.replace("text.", "text. More"));
+    }
+  });
+
+  it("accepts an empty list item, as Enter in a list makes", () => {
+    for (const [dialect, text] of [
+      ["latex", "\\begin{itemize}\n  \\item a\n\\end{itemize}\n\nAfter.\n"],
+      ["markdown", "- a\n\nAfter.\n"],
+    ] as const) {
+      const s = createSession(dialect, text);
+      const list = s.doc.firstChild!;
+      const item = schema.nodes.list_item.create(helpersFor(dialect).itemAttrs("bullet", 1, s.context), schema.nodes.paragraph.create());
+      change(s, new Transform(s.doc).insert(list.nodeSize - 1, item).doc);
+      const typed = posOf(s.doc, "a") + 1;
+      expect(typed).toBeGreaterThan(0);
+    }
+  });
+
+  it("inserts new display maths in either style and parses it back the same", () => {
+    for (const style of ["brackets", "equation"] as const) {
+      const text = "Before.\n\nAfter.\n";
+      const s = createSession("latex", text);
+      const math = schema.nodes.math_display.create(helpersFor("latex").mathDisplayAttrs("E = mc^2", s.context, style));
+      change(s, new Transform(s.doc).insert(childPos(s.doc, 1), math).doc);
+      expect(s.text).toBe(
+        style === "brackets"
+          ? "Before.\n\n\\[\n  E = mc^2\n\\]\n\nAfter.\n"
+          : "Before.\n\n\\begin{equation*}\n  E = mc^2\n\\end{equation*}\n\nAfter.\n",
+      );
+    }
+  });
+
+  it("splits a paragraph inside a quote with a blank line, in both dialects", () => {
+    const cases = [
+      ["latex", "Before.\n\n\\begin{quote}\nQuoted text.\n\\end{quote}\n", "\\begin{quote}\nQuoted \n\ntext.\n\\end{quote}"],
+      ["markdown", "Before.\n\n> quote text\n", "> quote \n>\n> text"],
+    ] as const;
+    for (const [dialect, text, want] of cases) {
+      const s = createSession(dialect, text);
+      const at = posOf(s.doc, dialect === "latex" ? "text." : "text");
+      change(s, new Transform(s.doc).split(at).doc);
+      expect(s.text).toContain(want);
+    }
+  });
+
+  it("accepts Enter at the end of a quote, then typing in the new paragraph", () => {
+    const cases = [
+      ["latex", "Before.\n\n\\begin{quote}\nQuoted.\n\\end{quote}\n\nAfter.\n", "\\begin{quote}\nQuoted.\n\nNext\n\\end{quote}"],
+      ["markdown", "Before.\n\n> Quoted.\n\nAfter.\n", "> Quoted.\n>\n> Next\n"],
+    ] as const;
+    for (const [dialect, text, want] of cases) {
+      const s = createSession(dialect, text);
+      const end = posOf(s.doc, "Quoted.") + "Quoted.".length;
+      // The new empty paragraph writes nothing yet.
+      expect(change(s, new Transform(s.doc).split(end).doc)).toEqual([]);
+      expect(s.text).toBe(text);
+      change(s, ins(new Transform(s.doc), "Next", end + 2).doc);
+      expect(s.text).toContain(want);
+    }
+  });
+
+  it("adds a second paragraph to a list item with a blank line", () => {
+    const md = "- one\n";
+    const s = createSession("markdown", md);
+    const list = s.doc.firstChild!;
+    const end = list.nodeSize - 2;
+    change(s, new Transform(s.doc).insert(end, schema.nodes.paragraph.create(null, schema.text("two"))).doc);
+    expect(s.text).toBe("- one\n\n  two\n");
+  });
+
   it("works for Markdown too", () => {
     const md = "# Title\n\nSome *text* here.\n\n- a\n- b\n";
     const s = createSession("markdown", md);

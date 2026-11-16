@@ -76,11 +76,15 @@ export const latexHelpers: DialectHelpers = {
     return { open: "$", body, close: "$" };
   },
 
+  // Split exactly as the parser splits what these write, so a new formula
+  // re-parses to the same node: the parser keeps an environment's first line
+  // break in `open` and its last in `close`, and \[..\] keeps all inner space
+  // in the body.
   mathDisplayAttrs(body, ctx, style) {
     if (style === "equation") {
-      return { open: "\\begin{equation*}" + ctx.eol + "  ", body, close: ctx.eol + "\\end{equation*}", env: "equation*" };
+      return { open: "\\begin{equation*}" + ctx.eol, body: "  " + body, close: ctx.eol + "\\end{equation*}", env: "equation*" };
     }
-    return { open: "\\[" + ctx.eol + "  ", body, close: ctx.eol + "\\]", env: "" };
+    return { open: "\\[", body: ctx.eol + "  " + body + ctx.eol, close: "\\]", env: "" };
   },
 
   codeBlockAttrs(lang, ctx) {
@@ -99,7 +103,7 @@ export const latexHelpers: DialectHelpers = {
     ].join(e);
   },
 
-  tableSrc(rows, cols, ctx) {
+  tableSrc(rows, cols, ctx, label = "tab:new") {
     const e = ctx.eol;
     const r = Math.max(1, rows);
     const c = Math.max(1, cols);
@@ -107,7 +111,7 @@ export const latexHelpers: DialectHelpers = {
     const row = "    " + Array(c).fill("").join(" & ") + " \\\\";
     const lines = ["\\begin{table}[htbp]", "  \\centering", `  \\begin{tabular}{${spec}}`, "    \\hline"];
     for (let i = 0; i < r; i++) lines.push(c === 1 ? "     \\\\" : row, "    \\hline");
-    lines.push("  \\end{tabular}", "  \\caption{}", "  \\label{tab:new}", "\\end{table}");
+    lines.push("  \\end{tabular}", "  \\caption{}", `  \\label{${label}}`, "\\end{table}");
     return lines.join(e);
   },
 

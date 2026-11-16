@@ -111,6 +111,10 @@ function attrStr(node: PMNode, name: string): string {
   return typeof v === "string" ? v : "";
 }
 
+function isEmptyPara(node: PMNode): boolean {
+  return node.type.name === "paragraph" && node.content.size === 0;
+}
+
 function gapsOf(node: PMNode): string[] {
   const g = node.attrs.gaps;
   return Array.isArray(g) ? (g as string[]) : [];
@@ -185,12 +189,17 @@ function emitBlock(node: PMNode, out: Out) {
     }
     case "list_item": {
       const gaps = gapsOf(node);
-      out.write(attrStr(node, "head"));
+      // A new, still empty item ("\item " or "- " from Enter) leaves no
+      // trailing space; that is also how an empty item parses.
+      const empty = node.childCount === 1 && node.firstChild!.isTextblock && node.firstChild!.content.size === 0;
+      const head = attrStr(node, "head");
+      out.write(empty ? head.trimEnd() : head);
       const indent = attrStr(node, "indent");
       if (indent) out.prefixes.push(indent);
       out.pm = start + 1;
       node.forEach((child, _o, i) => {
-        if (i > 0) out.write(i - 1 < gaps.length ? gaps[i - 1] : eol);
+        // A new block inside an item is a new paragraph: a blank line.
+        if (i > 0) out.write(i - 1 < gaps.length ? gaps[i - 1] : eol + eol);
         emitBlock(child, out);
       });
       if (indent) {
@@ -201,7 +210,10 @@ function emitBlock(node: PMNode, out: Out) {
     }
     case "container": {
       const gaps = gapsOf(node);
-      const n = node.childCount;
+      // Empty paragraphs at the end (Enter at the end of a quote) write
+      // nothing, not even their gap, until something is typed in them.
+      let n = node.childCount;
+      while (n > 1 && isEmptyPara(node.child(n - 1))) n--;
       const prefix = attrStr(node, "prefix");
       const begin = attrStr(node, "begin");
       out.write(begin);
@@ -212,7 +224,8 @@ function emitBlock(node: PMNode, out: Out) {
       out.pm = start + 1;
       const edge = begin === "" ? "" : eol;
       node.forEach((child, _o, i) => {
-        out.write(gapAt(gaps, i, n, () => eol, edge));
+        // A new block between two others is a new paragraph: a blank line.
+        if (i < n) out.write(gapAt(gaps, i, n, () => eol + eol, edge));
         emitBlock(child, out);
       });
       if (n === 0) out.write(gaps[0] ?? "");

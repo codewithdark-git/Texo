@@ -68,7 +68,8 @@ export interface DialectHelpers {
   mathDisplayAttrs(body: string, ctx: DocContext, style: "brackets" | "equation"): Record<string, unknown>;
   codeBlockAttrs(lang: string, ctx: DocContext): Record<string, unknown>;
   figureSrc(path: string, label: string, ctx: DocContext): string;
-  tableSrc(rows: number, cols: number, ctx: DocContext): string;
+  /** `label` is the table's \label key where the dialect has labels (default tab:new). */
+  tableSrc(rows: number, cols: number, ctx: DocContext, label?: string): string;
   ensurePackage(preambleSrc: string, pkg: string, ctx: DocContext): string | null;
   setFigurePath(attrs: Record<string, unknown>, path: string): Record<string, unknown>;
 }

@@ -521,7 +521,11 @@ class Session implements VisualSession {
       for (let x = 0; x < spans.length; x++) {
         const k = expected[x];
         const sp = spans[x];
-        if (sp.start !== blocks[k].start || sp.end !== blocks[k].end) return `block ${k} moved`;
+        // A block's own trailing spaces (a space just typed at the end of a
+        // paragraph) fall outside its re-split span; they mean nothing to TeX
+        // or Markdown, so the block still counts as in place.
+        const trailingSpaces = sp.end < blocks[k].end && /^[ \t]+$/.test(newText.slice(sp.end, blocks[k].end));
+        if (sp.start !== blocks[k].start || (sp.end !== blocks[k].end && !trailingSpaces)) return `block ${k} moved`;
         if (k < run.j0 || k >= run.j1) continue;
         const node = newKids[k];
         const src = newText.slice(sp.start, sp.end);
