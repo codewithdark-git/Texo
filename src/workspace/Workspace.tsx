@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowLeft, Columns2, FileCode2, FileText, ListTree, Files, X } from "lucide-react";
+import { ArrowLeft, Columns2, FileCode2, FileText, ListTree, Files, Search, X } from "lucide-react";
 import { SHOW_PDF_EVENT, type ProjectSummary } from "../lib/api";
 import { useApp } from "../store";
 import { Button } from "../components/Dialog";
 import { AppMenu } from "../components/AppMenu";
-import { countWords } from "../lib/wordcount";
+import { countMarkdownWords, countWords } from "../lib/wordcount";
 import { formatRelative } from "../lib/projects";
 import { useUi } from "../ui";
 import { useCompile } from "./compileStore";
@@ -19,11 +19,12 @@ import { CompilePanel } from "./CompilePanel";
 import { EditorPane } from "./EditorPane";
 import { FileTree } from "./FileTree";
 import { Outline } from "./Outline";
+import { SearchPanel } from "./SearchPanel";
 import { TabBar } from "./TabBar";
 import { useWorkspace } from "./store";
 
 type Layout = "split" | "code" | "pdf";
-type Panel = "files" | "outline";
+type Panel = "files" | "outline" | "search";
 
 const LAYOUT_KEY = "texo.layout";
 
@@ -62,6 +63,8 @@ export function Workspace({ project }: { project: ProjectSummary }) {
   const dialog = useUi((s) => s.dialog);
   const [prefs, setPrefs] = useState(loadLayout);
   const [panel, setPanel] = useState<Panel>("files");
+  // Bumped by Ctrl+Shift+F so the search box takes focus even when shown.
+  const [searchFocus, setSearchFocus] = useState(0);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const body = useRef<HTMLDivElement>(null);
 
@@ -120,7 +123,11 @@ export function Workspace({ project }: { project: ProjectSummary }) {
         e.preventDefault();
         e.stopPropagation();
       };
-      if (key === "enter") {
+      if (key === "f" && e.shiftKey) {
+        handled();
+        setPanel("search");
+        setSearchFocus((n) => n + 1);
+      } else if (key === "enter") {
         handled();
         void useCompile.getState().compile();
       } else if (key === "p" && !e.shiftKey) {
@@ -205,8 +212,8 @@ export function Workspace({ project }: { project: ProjectSummary }) {
         <div className="flex rounded-lg border border-border bg-surface p-0.5">
           {(
             [
-              ["code", "Code only", FileCode2],
-              ["split", "Code and PDF", Columns2],
+              ["code", "Editor only", FileCode2],
+              ["split", "Editor and PDF", Columns2],
               ["pdf", "PDF only", FileText],
             ] as const
           ).map(([value, label, Icon]) => (
@@ -242,12 +249,14 @@ export function Workspace({ project }: { project: ProjectSummary }) {
               [
                 ["files", "Files", Files],
                 ["outline", "Outline", ListTree],
+                ["search", "Search", Search],
               ] as const
             ).map(([value, label, Icon]) => (
               <button
                 key={value}
                 type="button"
                 aria-pressed={panel === value}
+                title={value === "search" ? "Search in project (Ctrl+Shift+F)" : undefined}
                 onClick={() => setPanel(value)}
                 className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-xs ${
                   panel === value ? "bg-surface-2 text-text" : "text-muted hover:text-text"
@@ -257,7 +266,13 @@ export function Workspace({ project }: { project: ProjectSummary }) {
               </button>
             ))}
           </div>
-          {panel === "files" ? <FileTree dropTarget={dropTarget} /> : <Outline />}
+          {panel === "files" ? (
+            <FileTree dropTarget={dropTarget} />
+          ) : panel === "outline" ? (
+            <Outline />
+          ) : (
+            <SearchPanel focusKey={searchFocus} />
+          )}
         </aside>
         <div
           role="separator"
@@ -311,21 +326,29 @@ export function Workspace({ project }: { project: ProjectSummary }) {
   );
 }
 
-/** Words in the open .tex file, recounted shortly after edits. */
+/** The word counter for a file: LaTeX or Markdown, or null for neither. */
+function counterFor(path: string | null): ((text: string) => number) | null {
+  if (path?.endsWith(".tex")) return countWords;
+  if (path && /\.(md|markdown)$/i.test(path)) return countMarkdownWords;
+  return null;
+}
+
+/** Words in the open .tex or .md file, recounted shortly after edits. */
 function useWordCount(active: string | null): number | null {
   const [count, setCount] = useState<number | null>(null);
   const isText = useWorkspace((s) => (s.active ? s.views[s.active]?.kind === "text" : false));
   useEffect(() => {
-    const model = active?.endsWith(".tex") && isText ? getModel(active) : undefined;
-    if (!model) {
+    const counter = counterFor(active);
+    const model = active && counter && isText ? getModel(active) : undefined;
+    if (!model || !counter) {
       setCount(null);
       return;
     }
-    setCount(countWords(model.getValue()));
+    setCount(counter(model.getValue()));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const sub = model.onDidChangeContent(() => {
       clearTimeout(timer);
-      timer = setTimeout(() => setCount(countWords(model.getValue())), 400);
+      timer = setTimeout(() => setCount(counter(model.getValue())), 400);
     });
     return () => {
       clearTimeout(timer);
@@ -360,7 +383,16 @@ function StatusBar() {
       {project?.mainDocument && <span>Main: {project.mainDocument}</span>}
       {compiling ? <span>Compiling…</span> : compiledAgo && <span title="Last compile">Compiled {compiledAgo}</span>}
       <span className="ml-auto">{lang === "bib" ? "BibTeX" : lang ? "LaTeX" : active ? "Plain text" : ""}</span>
-      {words !== null && <span title="Words in this file's text">{words.toLocaleString()} words</span>}
+      {words !== null && (
+        <button
+          type="button"
+          title="Words in this file's text. Click for details."
+          onClick={() => useUi.getState().openDialog("wordCount")}
+          className="rounded px-1 hover:bg-surface-2 hover:text-text"
+        >
+          {words.toLocaleString()} words
+        </button>
+      )}
       {cursor && (
         <span>
           Ln {cursor.line}, Col {cursor.column}

@@ -20,6 +20,8 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { ConfirmDialog, PromptDialog } from "../components/Dialog";
+import { isHiddenPath, useShowHidden } from "../lib/hiddenFiles";
+import { fileManagerName, trashName } from "../ui";
 import { ContextMenu, type MenuItem } from "../components/Menu";
 import { baseName, buildTree, joinPath, nativePath, parentDir, type TreeNode } from "./paths";
 import { useWorkspace } from "./store";
@@ -38,10 +40,17 @@ function iconFor(node: TreeNode, open: boolean) {
   return File;
 }
 
+/** The folder listing stops at this many entries. */
+const MAX_LISTED = 5000;
+
 /** Highlighted while files are dragged over the window (see Workspace). */
 export function FileTree({ dropTarget }: { dropTarget: string | null }) {
   const ws = useWorkspace();
-  const tree = useMemo(() => buildTree(ws.files), [ws.files]);
+  const showHidden = useShowHidden();
+  const tree = useMemo(
+    () => buildTree(showHidden ? ws.files : ws.files.filter((f) => !isHiddenPath(f.path))),
+    [ws.files, showHidden],
+  );
   const [dialog, setDialog] = useState<Dialog>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; node: TreeNode | null } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -61,7 +70,7 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
       { label: "New folder", icon: <FolderPlus size={15} />, onSelect: () => setDialog({ kind: "newFolder", dir }) },
       { label: "Add files…", icon: <Upload size={15} />, onSelect: () => void upload(dir) },
     ];
-    if (!node) return [...items, "divider", { label: "Show in File Explorer", icon: <FolderOpen size={15} />, onSelect: () => reveal("") }];
+    if (!node) return [...items, "divider", { label: `Show in ${fileManagerName}`, icon: <FolderOpen size={15} />, onSelect: () => reveal("") }];
     items.push("divider");
     if (!node.isDir && node.name.toLowerCase().endsWith(".tex") && node.path !== ws.project?.mainDocument) {
       items.push({ label: "Set as main document", icon: <Star size={15} />, onSelect: () => void ws.setMainDocument(node.path) });
@@ -75,9 +84,9 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
     }
     items.push(
       { label: "Rename", icon: <Pencil size={15} />, hint: "F2", onSelect: () => setDialog({ kind: "rename", node }) },
-      { label: "Show in File Explorer", icon: <FolderOpen size={15} />, onSelect: () => reveal(node.path) },
+      { label: `Show in ${fileManagerName}`, icon: <FolderOpen size={15} />, onSelect: () => reveal(node.path) },
       "divider",
-      { label: "Move to Recycle Bin", icon: <Trash2 size={15} />, danger: true, onSelect: () => setDialog({ kind: "delete", node }) },
+      { label: `Move to ${trashName}`, icon: <Trash2 size={15} />, danger: true, onSelect: () => setDialog({ kind: "delete", node }) },
     );
     return items;
   };
@@ -165,6 +174,9 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
       >
         {tree.map((n) => renderNode(n, 0))}
         {tree.length === 0 && <p className="px-3 py-2 text-sm text-muted">No files yet. Drop files here to add them.</p>}
+        {ws.files.length >= MAX_LISTED && (
+          <p className="px-3 py-2 text-xs text-muted">Showing the first 5,000 files.</p>
+        )}
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.node)} onClose={closeMenu} />}
@@ -198,14 +210,14 @@ export function FileTree({ dropTarget }: { dropTarget: string | null }) {
       )}
       {dialog?.kind === "delete" && (
         <ConfirmDialog
-          title={`Move ${dialog.node.isDir ? "folder" : "file"} to the Recycle Bin?`}
+          title={`Move ${dialog.node.isDir ? "folder" : "file"} to the ${trashName}?`}
           message={
             <>
               <strong className="text-text">{baseName(dialog.node.path)}</strong>
-              {dialog.node.isDir ? " and everything in it" : ""} will be moved to the Recycle Bin.
+              {dialog.node.isDir ? " and everything in it" : ""} will be moved to the {trashName}.
             </>
           }
-          confirmLabel="Move to Recycle Bin"
+          confirmLabel={`Move to ${trashName}`}
           danger
           onClose={() => setDialog(null)}
           onConfirm={() => {

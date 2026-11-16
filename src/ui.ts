@@ -9,7 +9,7 @@ export interface Toast {
   text: string;
 }
 
-export type GlobalDialog = "shortcuts" | "about" | "quickOpen" | null;
+export type GlobalDialog = "shortcuts" | "about" | "quickOpen" | "settings" | "wordCount" | null;
 
 interface UiStore {
   toasts: Toast[];

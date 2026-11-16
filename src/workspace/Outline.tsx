@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import { revealLine } from "./EditorPane";
-import { parseOutline, type OutlineItem } from "./outlineParser";
+import { parseMarkdownOutline, parseOutline, type OutlineItem } from "./outlineParser";
 import { getModel, useWorkspace } from "./store";
+
+/** The outline parser for a file, or null if it has no outline. */
+function parserFor(path: string | null): ((text: string) => OutlineItem[]) | null {
+  if (!path) return null;
+  if (/\.tex$/i.test(path)) return parseOutline;
+  if (/\.(md|markdown)$/i.test(path)) return parseMarkdownOutline;
+  return null;
+}
 
 export function Outline() {
   const active = useWorkspace((s) => s.active);
@@ -10,16 +18,17 @@ export function Outline() {
   const [items, setItems] = useState<OutlineItem[]>([]);
 
   useEffect(() => {
-    const model = active && isText && active.endsWith(".tex") ? getModel(active) : undefined;
-    if (!model) {
+    const parse = parserFor(active);
+    const model = active && isText && parse ? getModel(active) : undefined;
+    if (!model || !parse) {
       setItems([]);
       return;
     }
-    setItems(parseOutline(model.getValue()));
+    setItems(parse(model.getValue()));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const sub = model.onDidChangeContent(() => {
       clearTimeout(timer);
-      timer = setTimeout(() => setItems(parseOutline(model.getValue())), 250);
+      timer = setTimeout(() => setItems(parse(model.getValue())), 250);
     });
     return () => {
       clearTimeout(timer);
@@ -37,7 +46,7 @@ export function Outline() {
       <div className="min-h-0 flex-1 overflow-auto px-1.5 pb-4">
         {items.length === 0 ? (
           <p className="px-3 py-2 text-sm text-muted">
-            {active?.endsWith(".tex") ? "No sections in this file yet." : "Open a .tex file to see its outline."}
+            {parserFor(active) ? "No headings in this file yet." : "Open a .tex or .md file to see its outline."}
           </p>
         ) : (
           items.map((item, i) => (

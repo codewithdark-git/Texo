@@ -10,7 +10,7 @@ const THEMES: [ThemePref, string, typeof Sun][] = [
   ["dark", "Dark", Moon],
 ];
 
-/** The gear menu: theme, keyboard shortcuts, and About. */
+/** The gear menu: theme, Settings, keyboard shortcuts, and About. */
 export function AppMenu({ align = "right" }: { align?: "left" | "right" }) {
   const [pref, setPref] = useState(getThemePref);
   const openDialog = useUi((s) => s.openDialog);
@@ -24,6 +24,12 @@ export function AppMenu({ align = "right" }: { align?: "left" | "right" }) {
       onSelect: () => setThemePref(value),
     })),
     "divider",
+    {
+      label: "Settings…",
+      icon: <Settings2 size={15} />,
+      hint: "Ctrl+,",
+      onSelect: () => openDialog("settings"),
+    },
     {
       label: "Keyboard shortcuts",
       icon: <Keyboard size={15} />,

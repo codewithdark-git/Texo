@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseOutline, plainTitle } from "./outlineParser";
+import { parseMarkdownOutline, parseOutline, plainTitle } from "./outlineParser";
 import { buildTree, isWithin, parentDir, rebase } from "./paths";
 
 describe("paths", () => {
@@ -48,5 +48,41 @@ describe("outline", () => {
 
   it("cleans titles for display", () => {
     expect(plainTitle("Results\\footnote{see appendix} for \\textbf{all}")).toBe("Results for all");
+  });
+});
+
+describe("markdown outline", () => {
+  it("finds ATX and setext headings and skips fenced code", () => {
+    const md = [
+      "---",
+      "title: Notes",
+      "---",
+      "# Title #",
+      "Intro text",
+      "",
+      "Setext One",
+      "==========",
+      "",
+      "Setext *Two*",
+      "---",
+      "```bash",
+      "# not a heading",
+      "Nor this",
+      "===",
+      "```",
+      "###### Deep [link](https://example.com)",
+      "####### Seven is not a heading",
+      "#NoSpace",
+      "- list item",
+      "---",
+      "~~~",
+      "## hidden",
+    ].join("\n");
+    expect(parseMarkdownOutline(md)).toEqual([
+      { level: 1, title: "Title", line: 4, starred: false },
+      { level: 1, title: "Setext One", line: 7, starred: false },
+      { level: 2, title: "Setext Two", line: 10, starred: false },
+      { level: 6, title: "Deep link", line: 17, starred: false },
+    ]);
   });
 });

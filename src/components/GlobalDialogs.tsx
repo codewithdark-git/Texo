@@ -3,8 +3,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLink } from "lucide-react";
 import { useApp } from "../store";
-import { useUi } from "../ui";
+import { trashName, useUi } from "../ui";
+import { WordCountDialog } from "../workspace/WordCountDialog";
 import { Button, Modal } from "./Dialog";
+import { SettingsDialog } from "./SettingsDialog";
 import { Logo } from "./Sidebar";
 
 const REPO = "https://github.com/codewithdark-git/Texo";
@@ -18,17 +20,36 @@ const SHORTCUTS: [string, [string, string][]][] = [
       ["Ctrl+Enter", "Compile"],
       ["Ctrl+W", "Close the current tab"],
       ["Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous tab"],
+      ["Ctrl+Shift+F", "Search in project"],
+      ["Ctrl+,", "Settings"],
+      ["Ctrl+N", "New project (Dashboard)"],
+      ["Ctrl+O", "Open a folder (Dashboard)"],
+      ["Ctrl+Shift+O", "Import a .zip (Dashboard)"],
     ],
   ],
   [
     "Editor",
     [
-      ["Ctrl+B / Ctrl+I", "Bold / italic"],
+      ["Ctrl+B / Ctrl+I", "Bold / italic (\\emph)"],
       ["Ctrl+/", "Comment or uncomment lines"],
       ["Ctrl+F / Ctrl+H", "Find / replace"],
       ["Alt+Z", "Toggle word wrap"],
       ["Ctrl+= / Ctrl+- / Ctrl+0", "Zoom in / out / reset"],
       ["F1", "All editor commands"],
+    ],
+  ],
+  [
+    "Visual mode",
+    [
+      ["Ctrl+Shift+E", "Switch between Code and Visual"],
+      ["Ctrl+B / Ctrl+I / Ctrl+U", "Bold / italic / underline"],
+      ["Ctrl+Shift+M", "Inline formula"],
+      ["Ctrl+K", "Link"],
+      ["Ctrl+Alt+1..4 / Ctrl+Alt+0", "Heading level / normal text"],
+      ["Tab / Shift+Tab", "Indent / outdent list item"],
+      ['"# ", "- ", "1. ", "**text**", "$x$"', "Markdown-style shortcuts"],
+      ["/", "Insert menu"],
+      ["Ctrl+F / Ctrl+H", "Find / replace"],
     ],
   ],
   [
@@ -44,7 +65,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     "Files",
     [
       ["F2", "Rename the selected file"],
-      ["Delete", "Move the selected file to the Recycle Bin"],
+      ["Delete", `Move the selected file to the ${trashName}`],
       ["Ctrl+Shift+/", "This list"],
     ],
   ],
@@ -135,6 +156,9 @@ export function GlobalDialogs() {
       if (e.ctrlKey && e.shiftKey && (e.key === "?" || e.code === "Slash")) {
         e.preventDefault();
         openDialog("shortcuts");
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
+        e.preventDefault();
+        openDialog("settings");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -143,5 +167,7 @@ export function GlobalDialogs() {
 
   if (dialog === "shortcuts") return <ShortcutsDialog onClose={close} />;
   if (dialog === "about") return <AboutDialog onClose={close} />;
+  if (dialog === "settings") return <SettingsDialog onClose={close} />;
+  if (dialog === "wordCount") return <WordCountDialog onClose={close} />;
   return null;
 }

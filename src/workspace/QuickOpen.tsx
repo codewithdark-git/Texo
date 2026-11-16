@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { File, FileText, Image, BookMarked, Search } from "lucide-react";
 import { fuzzyFilter, type FuzzyMatch } from "../lib/fuzzy";
+import { isHiddenPath, useShowHidden } from "../lib/hiddenFiles";
 import { useWorkspace } from "./store";
 
 function iconFor(path: string) {
@@ -37,7 +38,11 @@ export function QuickOpen({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState(0);
   const list = useRef<HTMLUListElement>(null);
 
-  const paths = useMemo(() => files.filter((f) => !f.isDir).map((f) => f.path), [files]);
+  const showHidden = useShowHidden();
+  const paths = useMemo(
+    () => files.filter((f) => !f.isDir && (showHidden || !isHiddenPath(f.path))).map((f) => f.path),
+    [files, showHidden],
+  );
   const matches = useMemo(() => fuzzyFilter(query, paths), [query, paths]);
 
   useEffect(() => setSelected(0), [query]);

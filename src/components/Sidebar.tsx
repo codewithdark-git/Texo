@@ -1,6 +1,13 @@
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, CheckCircle2, FolderCog, Library, Loader2, RefreshCw } from "lucide-react";
 import { useApp } from "../store";
 import { AppMenu } from "./AppMenu";
+
+/** Asks for a new projects folder and switches to it (Sidebar and Settings). */
+export async function changeProjectsRoot() {
+  const picked = await openDialog({ directory: true, multiple: false, title: "Choose where new projects are saved" });
+  if (typeof picked === "string") await useApp.getState().setProjectsRoot(picked);
+}
 
 export function Logo({ size = 28 }: { size?: number }) {
   return (
@@ -59,7 +66,7 @@ function EngineBlock() {
   );
 }
 
-export function Sidebar({ onChangeRoot }: { onChangeRoot: () => void }) {
+export function Sidebar({ onChangeRoot = changeProjectsRoot }: { onChangeRoot?: () => void }) {
   const settings = useApp((s) => s.settings);
   const count = useApp((s) => s.projects.length);
 
@@ -88,7 +95,7 @@ export function Sidebar({ onChangeRoot }: { onChangeRoot: () => void }) {
         </div>
         <button
           type="button"
-          onClick={onChangeRoot}
+          onClick={() => void onChangeRoot()}
           className="mt-2 inline-flex items-center gap-1.5 text-xs text-accent hover:underline"
         >
           <FolderCog size={13} /> Change
