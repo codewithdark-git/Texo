@@ -17,6 +17,7 @@ export type GlobalDialog =
   | "settings"
   | "wordCount"
   | "newProject"
+  | "support"
   | null;
 
 interface UiStore {

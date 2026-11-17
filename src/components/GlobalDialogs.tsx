@@ -8,6 +8,7 @@ import { WordCountDialog } from "../workspace/WordCountDialog";
 import { Button, Modal } from "./Dialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { SettingsDialog } from "./SettingsDialog";
+import { SupportDialog } from "./SupportDialog";
 import { Logo } from "./Sidebar";
 
 const REPO = "https://github.com/codewithdark-git/Texo";
@@ -168,6 +169,7 @@ export function GlobalDialogs() {
   }, [openDialog]);
 
   if (dialog === "shortcuts") return <ShortcutsDialog onClose={close} />;
+  if (dialog === "support") return <SupportDialog onClose={close} />;
   if (dialog === "about") return <AboutDialog onClose={close} />;
   if (dialog === "settings") return <SettingsDialog onClose={close} />;
   if (dialog === "wordCount") return <WordCountDialog onClose={close} />;

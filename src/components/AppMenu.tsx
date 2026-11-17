@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FilePlus2, Info, Keyboard, Monitor, Moon, Settings2, Sun } from "lucide-react";
+import { FilePlus2, Heart, Info, Keyboard, Monitor, Moon, Settings2, Sun } from "lucide-react";
 import { getThemePref, onThemeChange, setThemePref, type ThemePref } from "../lib/theme";
 import { useUi } from "../ui";
 import { Menu, type MenuItem } from "./Menu";
@@ -10,7 +10,7 @@ const THEMES: [ThemePref, string, typeof Sun][] = [
   ["dark", "Dark", Moon],
 ];
 
-/** The gear menu: New project, theme, Settings, keyboard shortcuts, and About. */
+/** The gear menu: New project, theme, Settings, keyboard shortcuts, About, and Support. */
 export function AppMenu({ align = "right" }: { align?: "left" | "right" }) {
   const [pref, setPref] = useState(getThemePref);
   const openDialog = useUi((s) => s.openDialog);
@@ -40,6 +40,8 @@ export function AppMenu({ align = "right" }: { align?: "left" | "right" }) {
       onSelect: () => openDialog("shortcuts"),
     },
     { label: "About Texo", icon: <Info size={15} />, onSelect: () => openDialog("about") },
+    "divider",
+    { label: "Support Texo", icon: <Heart size={15} />, onSelect: () => openDialog("support") },
   ];
 
   return (

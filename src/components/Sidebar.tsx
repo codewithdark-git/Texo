@@ -2,6 +2,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, CheckCircle2, FolderCog, Library, Loader2, RefreshCw } from "lucide-react";
 import { useApp } from "../store";
 import { AppMenu } from "./AppMenu";
+import { SupportButton } from "./SupportDialog";
 
 /** Asks for a new projects folder and switches to it (Sidebar and Settings). */
 export async function changeProjectsRoot() {
@@ -25,7 +26,7 @@ function EngineBlock() {
   const engine = useApp((s) => s.engine);
   const setup = useApp((s) => s.engineSetup);
   const retry = useApp((s) => s.checkEngine);
-  if (!engine) return <div className="mt-auto" />;
+  if (!engine) return null;
 
   const name = engine.bundled
     ? "Built-in engine (Tectonic)"
@@ -34,7 +35,7 @@ function EngineBlock() {
       : engine.distribution ?? "No LaTeX found";
 
   return (
-    <div className="mt-auto border-t border-border px-4 py-3 text-xs">
+    <div className="border-t border-border px-4 py-3 text-xs">
       <div className="mb-1 text-muted">LaTeX engine</div>
       <div className="flex items-center gap-1.5">
         {setup.running ? (
@@ -85,6 +86,10 @@ export function Sidebar({ onChangeRoot = changeProjectsRoot }: { onChangeRoot?: 
           <span className="text-xs text-muted">{count}</span>
         </div>
       </nav>
+
+      <div className="mt-auto px-3 pb-3">
+        <SupportButton />
+      </div>
 
       <EngineBlock />
 
