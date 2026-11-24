@@ -10,6 +10,7 @@ import type { DocContext } from "../types";
 import { latexSerialize } from "./serialize";
 import { matchBrace, matchBracket, parseLatexInline, skipArgs, type InlineState } from "./inline";
 import { scan, T, type Token } from "./scanner";
+import { SPACER_BLOCKS, spacingAmount } from "./style";
 
 export type BlockKind = "comment" | "env" | "math" | "heading" | "command" | "paragraph" | "raw";
 
@@ -37,9 +38,6 @@ const COMMANDS: Record<string, string> = {
   bibliography: "bibliography",
   bibliographystyle: "bibliography",
   printbibliography: "bibliography",
-  newpage: "pagebreak",
-  clearpage: "pagebreak",
-  cleardoublepage: "pagebreak",
   appendix: "appendix",
   frontmatter: "matter",
   mainmatter: "matter",
@@ -194,7 +192,7 @@ class Splitter {
 
   tryCommand(k: number): { end: number; kind: BlockKind } | null {
     const w = this.word(k);
-    if (w === null || COMMANDS[w] === undefined) return null;
+    if (w === null || (COMMANDS[w] === undefined && SPACER_BLOCKS[w] === undefined)) return null;
     const e = skipArgs(this.toks, k + 1);
     const le = this.lineEnd(e);
     let last = e - 1;
@@ -489,10 +487,17 @@ function buildContainer(p: EnvParts, kind: string, label: string, ctx: DocContex
   const parsed = parseChildren(p.inner, ctx, state);
   if (!parsed) return null;
   return schema.nodes.container.create(
-    { kind, env: p.name, label, begin: p.begin, end: p.end, prefix: "", gaps: parsed.gaps },
+    { kind, env: p.name, label, begin: p.begin, end: p.end, prefix: "", gaps: parsed.gaps, align: ALIGN_OF_ENV[p.name] ?? "" },
     parsed.nodes,
   );
 }
+
+/** The alignment the center / flushleft / flushright environments give their content. */
+export const ALIGN_OF_ENV: Record<string, "center" | "left" | "right"> = {
+  center: "center",
+  flushleft: "left",
+  flushright: "right",
+};
 
 function buildMathEnv(p: EnvParts): PMNode {
   let open = p.begin;
@@ -661,6 +666,9 @@ function buildHeading(src: string, ctx: DocContext, state: InlineState): PMNode 
 }
 
 function buildCommand(src: string): PMNode {
+  const s = /^\\([A-Za-z]+\*?)/.exec(src)!;
+  const spacer = SPACER_BLOCKS[s[1]];
+  if (spacer) return schema.nodes.spacer_block.create({ src, kind: spacer, amount: spacingAmount(src) });
   const m = /^\\([A-Za-z]+)/.exec(src)!;
   const kind = COMMANDS[m[1]] ?? "raw";
   let target = "";

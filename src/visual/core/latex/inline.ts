@@ -8,6 +8,7 @@ import { schema } from "../schema";
 import { serializeInlineWith } from "../serialize";
 import { latexCodec } from "./escape";
 import { scan, T, type Token } from "./scanner";
+import { COLOR_NAME, isSizeCmd, SPACING_WORDS, spacingAmount } from "./style";
 
 /** Per-block state: mark group ids count from 1 in each block. */
 export interface InlineState {
@@ -67,9 +68,20 @@ const SYMBOL_GLYPHS: Record<string, string> = {
   "\\@": "",
   "\\/": "",
   "\\-": "",
+  // A negative thin space: nothing to show.
+  "\\!": "",
   "\\:": " ",
   "\\;": " ",
 };
+
+/** One declaration at the start of a {..} group: {\large ..}, {\bfseries ..}, {\color{red} ..}. */
+interface Declaration {
+  type: string;
+  extra: Record<string, unknown>;
+  /** Token range of the declaration and the one space after it. */
+  a: number;
+  b: number;
+}
 
 const CITE = /^(cite|citep|citet|citealp|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite|Cite|Parencite|Textcite|Autocite)\*?$/;
 const REF = /^(ref|eqref|autoref|cref|Cref|pageref|nameref|vref)\*?$/;
@@ -282,15 +294,19 @@ class Parser {
       items.push({ kind: "node", node: atom("glyph", { src: "{}", display: "" }) });
       return c + 1;
     }
-    const first = toks[k + 1];
-    if (first.t === T.Word) {
-      const name = this.s(first).slice(1);
-      const type = DECLARATIONS[name];
-      if (type && !marks.includes(type)) {
-        let b = k + 2;
-        if (b < c && toks[b].t === T.Space) b++;
-        const open = this.span(k, b);
-        this.group(type, open, "}", null, b, c, marks, items, this.span(k, c + 1));
+    // {,} and {.}: a decimal mark kept tight in numbers such as 9{,}577.
+    if (c === k + 2 && toks[k + 1].t === T.Text) {
+      const ch = this.s(toks[k + 1]);
+      if (ch === "," || ch === ".") {
+        items.push({ kind: "node", node: atom("glyph", { src: "{" + ch + "}", display: ch }) });
+        return c + 1;
+      }
+    }
+    const run = this.declarations(k + 1, c);
+    if (run && run[run.length - 1].b < c) {
+      const types = run.map((d) => d.type);
+      if (new Set(types).size === types.length && !types.some((t) => marks.includes(t))) {
+        this.declGroups(run, k, c, marks, items);
         return c + 1;
       }
     }
@@ -298,12 +314,79 @@ class Parser {
     return c + 1;
   }
 
+  /** The declarations that open a group at token i (up to its closing brace c), or null. */
+  declarations(i: number, c: number): Declaration[] | null {
+    const toks = this.toks;
+    const run: Declaration[] = [];
+    while (i < c && toks[i].t === T.Word) {
+      const name = this.s(toks[i]).slice(1);
+      let type: string;
+      let extra: Record<string, unknown> = {};
+      let e = i + 1;
+      if (isSizeCmd(name)) {
+        type = "size";
+        extra = { cmd: name };
+      } else if (DECLARATIONS[name]) type = DECLARATIONS[name];
+      else if (name === "color") {
+        const col = this.colorArgs(e, c);
+        if (!col) break;
+        type = "color";
+        extra = { color: col.color, model: col.model };
+        e = col.end;
+      } else break;
+      if (e < c && toks[e].t === T.Space) e++;
+      run.push({ type, extra, a: i, b: e });
+      i = e;
+    }
+    return run.length > 0 ? run : null;
+  }
+
+  /**
+   * {\LARGE\bfseries Title}: one mark per declaration, nested in order. The
+   * first carries the braces ("{\LARGE" .. "}"); the others open with their
+   * own spelling and close with nothing, since the group's brace ends them.
+   */
+  declGroups(run: Declaration[], k: number, c: number, marks: string[], items: Item[]) {
+    const gids = run.map(() => this.state.gid++);
+    let inner = this.seq(run[run.length - 1].b, c, [...marks, ...run.map((d) => d.type)]);
+    if (inner.length === 0) {
+      items.push(raw(this.span(k, c + 1), "{…}"));
+      return;
+    }
+    for (let j = run.length - 1; j >= 0; j--) {
+      const d = run[j];
+      const open = j === 0 ? this.span(k, d.b) : this.span(d.a, d.b);
+      const attrs = { open, close: j === 0 ? "}" : "", gid: gids[j], depth: marks.length + j, ...d.extra };
+      const src = j === 0 ? this.span(k, c + 1) : this.span(d.a, c);
+      inner = [{ kind: "group", mark: schema.marks[d.type].create(attrs), src, items: inner, label: open.trim() }];
+    }
+    items.push(...inner);
+  }
+
+  /** The [model]{spec} arguments of \color or \textcolor at token i, or null when not a plain colour. */
+  colorArgs(i: number, end: number): { model: string; color: string; end: number } | null {
+    const toks = this.toks;
+    let model = "";
+    if (i < end && toks[i].t === T.LBracket) {
+      const c = matchBracket(toks, i, end);
+      if (c === -1) return null;
+      model = this.src.slice(toks[i].e, toks[c].s);
+      if (!/^[A-Za-z]+$/.test(model)) return null;
+      i = c + 1;
+    }
+    if (i >= end || toks[i].t !== T.LBrace) return null;
+    const c = matchBrace(toks, i, end);
+    if (c === -1) return null;
+    const color = this.src.slice(toks[i].e, toks[c].s);
+    if (model === "" ? !COLOR_NAME.test(color) : !/^[A-Za-z0-9., ]+$/.test(color)) return null;
+    return { model, color, end: c + 1 };
+  }
+
   /** Builds a mark group over tokens [a, b), or a raw chip if it is empty or does not round-trip. */
-  group(type: string, open: string, close: string, href: string | null, a: number, b: number, marks: string[], items: Item[], src: string) {
+  group(type: string, open: string, close: string, extra: Record<string, unknown> | null, a: number, b: number, marks: string[], items: Item[], src: string) {
     const depth = marks.length;
     const gid = this.state.gid++;
-    const attrs: Record<string, unknown> = { open, close, gid, depth };
-    if (href !== null) attrs.href = href;
+    const attrs: Record<string, unknown> = { open, close, gid, depth, ...extra };
     const inner = this.seq(a, b, [...marks, type]);
     if (inner.length === 0) {
       items.push(raw(src, open.trim()));
@@ -339,9 +422,30 @@ class Parser {
           const src = this.span(k, c + 1);
           const href = this.src.slice(toks[k + 1].e, toks[u].s);
           if (marks.includes("link")) items.push(raw(src, "\\href"));
-          else this.group("link", this.span(k, u + 2), "}", href, u + 2, c, marks, items, src);
+          else this.group("link", this.span(k, u + 2), "}", { href }, u + 2, c, marks, items, src);
           return c + 1;
         }
+      }
+    }
+    if (name === "textcolor") {
+      const col = this.colorArgs(k + 1, end);
+      if (col && col.end < end && toks[col.end].t === T.LBrace) {
+        const c = matchBrace(toks, col.end, end);
+        if (c !== -1) {
+          const src = this.span(k, c + 1);
+          if (marks.includes("color")) items.push(raw(src, "\\textcolor"));
+          else this.group("color", this.span(k, col.end + 1), "}", { color: col.color, model: col.model }, col.end + 1, c, marks, items, src);
+          return c + 1;
+        }
+      }
+    }
+    const spacing = SPACING_WORDS[name];
+    if (spacing) {
+      const e = this.spacingEnd(k + 1, end, spacing.arg);
+      if (e !== -1) {
+        const src = this.span(k, e);
+        items.push({ kind: "node", node: atom("spacing", { src, kind: spacing.kind, amount: spacingAmount(src) }) });
+        return e;
       }
     }
     if (WORD_GLYPHS[name] !== undefined) {
@@ -379,7 +483,8 @@ class Parser {
       items.push({ kind: "node", node: atom("url", { src, url: argOf(k + 1) }) });
       return e;
     }
-    if (name === "footnote" && e > k + 1 && toks[e - 1].t === T.RBrace) {
+    // \thanks (in a title block) is a footnote too, and keeps its name when edited.
+    if ((name === "footnote" || name === "thanks") && e > k + 1 && toks[e - 1].t === T.RBrace) {
       let i = k + 1;
       if (toks[i].t === T.LBracket) i = matchBracket(toks, i, end) + 1;
       if (toks[i].t === T.LBrace && matchBrace(toks, i, end) === e - 1) {
@@ -389,6 +494,32 @@ class Parser {
     }
     items.push(raw(src, "\\" + bare));
     return e;
+  }
+
+  /**
+   * The end of a spacing command's arguments starting at token i, or -1 when
+   * a required {length} is missing. Without arguments, the spaces after it
+   * belong to it too: TeX swallows them, so Visual mode must not show them.
+   */
+  spacingEnd(i: number, end: number, arg: "brace" | "opt" | "none"): number {
+    const toks = this.toks;
+    if (arg === "brace") {
+      if (i >= end || toks[i].t !== T.LBrace) return -1;
+      const c = matchBrace(toks, i, end);
+      return c === -1 ? -1 : c + 1;
+    }
+    if (arg === "opt" && i < end && toks[i].t === T.LBracket) {
+      const c = matchBracket(toks, i, end);
+      if (c !== -1) return c + 1;
+    }
+    return this.eatSpace(i, end);
+  }
+
+  /** Token i, or the one after it when it is a space not followed by "[" (which would read as an argument). */
+  eatSpace(i: number, end: number): number {
+    const toks = this.toks;
+    if (i < end && toks[i].t === T.Space && !(i + 1 < end && toks[i + 1].t === T.LBracket)) return i + 1;
+    return i;
   }
 
   symbol(k: number, end: number, items: Item[]): number {
@@ -408,8 +539,9 @@ class Parser {
       if (e < end && toks[e].t === T.LBracket) {
         const c = matchBracket(toks, e, end);
         if (c !== -1) e = c + 1;
-      }
-      items.push(raw(this.span(k, e), "↵"));
+      } else e = this.eatSpace(e, end);
+      const src = this.span(k, e);
+      items.push({ kind: "node", node: atom("spacing", { src, kind: "break", amount: spacingAmount(src) }) });
       return e;
     }
     const e = skipArgs(toks, k + 1, end);

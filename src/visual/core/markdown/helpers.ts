@@ -120,4 +120,11 @@ export const markdownHelpers: DialectHelpers = {
     if (!m) return { ...attrs, path };
     return { ...attrs, path, src: m[1] + path + src.slice(m[0].length) };
   },
+
+  // Markdown has no font sizes, colours, alignment or page layout.
+  sizeMark: () => null,
+  colorMark: () => null,
+  alignAttrs: () => null,
+  spacerAttrs: () => null,
+  spacingAttrs: () => null,
 };

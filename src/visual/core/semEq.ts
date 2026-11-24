@@ -11,7 +11,21 @@ function markKey(marks: readonly Mark[]): string {
   return marks.map((m) => `${m.type.name}|${m.attrs.open}|${m.attrs.close}|${m.attrs.href ?? ""}`).join("\u0001");
 }
 
+/** A spacing command ending in a control word (\quad, \noindent, \\) swallows the spaces after it. */
+const EATS_SPACE = /(\\[A-Za-z]+\*?|\\\\\*?)$/;
+
+/**
+ * Treats a raw \\ chip as the spacing atom the same bytes parse to (older UI
+ * code inserts line breaks as raw chips).
+ */
+function isSpacing(node: PMNode): boolean {
+  if (node.type.name === "spacing") return true;
+  return node.type.name === "raw_inline" && /^\\\\\*?\s*$/.test(String(node.attrs.src));
+}
+
 function atomSrc(node: PMNode): string {
+  // "\noindent " and "\noindent" mean the same: the space is TeX's to skip.
+  if (isSpacing(node)) return String(node.attrs.src).trimEnd();
   const src =
     node.type.name === "math_inline"
       ? `${node.attrs.open}${node.attrs.body}${node.attrs.close}`
@@ -32,11 +46,18 @@ function stream(node: PMNode): Seg[] {
     if (last && last.kind === "text" && last.marks === marks) last.text += text;
     else out.push({ kind: "text", marks, text });
   };
+  let eat = false;
   node.forEach((child) => {
     const marks = markKey(child.marks);
-    if (child.isText) addText(marks, child.text!);
-    else if (child.type.name === "glyph") addText(marks, child.attrs.display as string);
-    else out.push({ kind: "atom", marks, key: child.type.name + "\u0000" + atomSrc(child) });
+    if (child.isText) {
+      const text = eat ? child.text!.replace(/^[ \t]+/, "") : child.text!;
+      addText(marks, text);
+      eat = eat && text === "";
+      return;
+    }
+    if (child.type.name === "glyph") addText(marks, child.attrs.display as string);
+    else out.push({ kind: "atom", marks, key: (isSpacing(child) ? "spacing" : child.type.name) + "\u0000" + atomSrc(child) });
+    eat = isSpacing(child) && EATS_SPACE.test(atomSrc(child));
   });
   return out;
 }

@@ -47,6 +47,18 @@ function endsInControlWord(tail: string): boolean {
   return i < tail.length - 1 && i >= 0 && tail.charCodeAt(i) === 92;
 }
 
+/** Does `tail` end in \\ (an even run of backslashes), optionally starred? */
+function endsInLineBreak(tail: string): boolean {
+  let i = tail.length - 1;
+  if (tail.charCodeAt(i) === 42) i--;
+  let n = 0;
+  while (i >= 0 && tail.charCodeAt(i) === 92) {
+    n++;
+    i--;
+  }
+  return n >= 2 && n % 2 === 0;
+}
+
 /**
  * "{}" between a control word and a letter (\LaTeX{}x), between "$" and "$",
  * and between "-" and "-" (so new text never forms -- or $$ by accident).
@@ -58,6 +70,8 @@ function guard(tail: string, next: string): string {
   if (a === 36 && b === 36) return "{}";
   if (a === 45 && b === 45) return "{}";
   if (isLetter(b) && (isLetter(a) || a === 64) && endsInControlWord(tail)) return "{}";
+  // A line break \\ reads a following * or [..] as its own argument.
+  if ((b === 42 || b === 91) && endsInLineBreak(tail)) return "{}";
   return "";
 }
 

@@ -150,6 +150,11 @@ describe("latex inline glyphs and chips", () => {
     }
   });
 
+  it("shows \\thanks as a footnote", () => {
+    const p = para("Ahsan Umar\\thanks{Corresponding author: \\texttt{a@b.c}.}");
+    expect(describeInline(p).filter((s) => s.startsWith("<"))).toEqual(["<footnote:\\thanks{Corresponding author: \\texttt{a@b.c}.}>"]);
+  });
+
   it("parses chips", () => {
     const p = para("\\cite[p.~1][see]{a, b} \\eqref{e} \\label{l} \\footnote[2]{note} \\url{u} \\Cref*{x}");
     const types = describeInline(p).filter((s) => s.startsWith("<"));
@@ -180,8 +185,9 @@ describe("latex inline glyphs and chips", () => {
     const d = describeInline(para("\\foo*[o]{a}{b} x \\\\ y \\\\*[2pt] z & # ^ _ {grp} \\verb|{| \\item"));
     expect(d.filter((s) => s.startsWith("<"))).toEqual([
       "<raw_inline:\\foo*[o]{a}{b}>",
-      "<raw_inline:\\\\>",
-      "<raw_inline:\\\\*[2pt]>",
+      // Line breaks are spacing atoms now; the space after \\ is TeX's to skip.
+      "<spacing:\\\\ >",
+      "<spacing:\\\\*[2pt]>",
       "<raw_inline:&>",
       "<raw_inline:#>",
       "<raw_inline:^>",

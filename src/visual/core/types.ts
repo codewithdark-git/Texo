@@ -2,6 +2,7 @@
 // modules import from here so they do not depend on the index.
 
 import type { Fragment, Node as PMNode, Slice } from "prosemirror-model";
+import type { SizeCmd } from "./latex/style";
 
 export type Dialect = "latex" | "markdown";
 
@@ -72,7 +73,25 @@ export interface DialectHelpers {
   tableSrc(rows: number, cols: number, ctx: DocContext, label?: string): string;
   ensurePackage(preambleSrc: string, pkg: string, ctx: DocContext): string | null;
   setFigurePath(attrs: Record<string, unknown>, path: string): Record<string, unknown>;
+  /** Attrs for a new `size` mark ({\large ..}), or null when the dialect has no sizes. */
+  sizeMark(cmd: SizeCmd, ctx: DocContext): Record<string, unknown> | null;
+  /**
+   * Attrs for a new `color` mark (\textcolor{red}{..}), or null when the
+   * dialect has no colours or the name is not a plain xcolor name. The
+   * document needs \usepackage{xcolor}: see ensurePackage.
+   */
+  colorMark(color: string, ctx: DocContext): Record<string, unknown> | null;
+  /** Attrs for a new center / flushleft / flushright container, or null. */
+  alignAttrs(align: Align, ctx: DocContext): Record<string, unknown> | null;
+  /** Attrs for a new spacer_block (\newpage, \vspace{..}), or null. */
+  spacerAttrs(kind: "pagebreak" | "vspace", ctx: DocContext, amount?: string): Record<string, unknown> | null;
+  /** Attrs for a new inline `spacing` atom: a line break (\\), \quad, \noindent. */
+  spacingAttrs(kind: "break" | "hspace" | "noindent", ctx: DocContext): Record<string, unknown> | null;
 }
+
+export type Align = "center" | "left" | "right";
+
+export type { SizeCmd };
 
 export interface TabularCell {
   start: number;
