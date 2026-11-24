@@ -3,11 +3,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertCircle, AlertTriangle, ExternalLink, Info, Lightbulb, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import { SHOW_PDF_EVENT, type Issue, type Severity } from "../lib/api";
 import { Button } from "../components/Dialog";
+import { bibtexBackendEdit, parseHint } from "../editor/biblatexFix";
+import { toast } from "../ui";
 import { useCompile } from "./compileStore";
 import { revealSource } from "./EditorPane";
 import { ENGINE_NAMES } from "./CompileControls";
 import { PdfViewer } from "./PdfViewer";
-import { useWorkspace } from "./store";
+import { getModel, useWorkspace } from "./store";
 
 type Tab = "pdf" | "issues" | "log";
 type Filter = "all" | "error" | "warning" | "badbox";
@@ -24,6 +26,59 @@ function formatDuration(ms: number): string {
 
 async function goTo(issue: Issue) {
   if (issue.file) await revealSource(issue.file, issue.line ?? 1);
+}
+
+/**
+ * Switches the main document's biblatex to the BibTeX backend. The edit goes
+ * through the file's editor model, so Ctrl+Z undoes it and saving and
+ * auto-compile pick it up like a typed change.
+ */
+async function switchToBibtexBackend() {
+  const ws = useWorkspace.getState();
+  const main = ws.project?.mainDocument;
+  if (!main) return;
+  if (!getModel(main)) await ws.openFile(main);
+  const model = getModel(main);
+  if (!model) {
+    toast(`Couldn't open ${main}.`, "error");
+    return;
+  }
+  const edit = bibtexBackendEdit(model.getValue());
+  if (!edit) {
+    toast(`${main} has no \\usepackage{biblatex} that uses Biber.`, "info");
+    return;
+  }
+  const from = model.getPositionAt(edit.start);
+  const to = model.getPositionAt(edit.end);
+  model.pushStackElement();
+  model.pushEditOperations(
+    [],
+    [{ range: { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column }, text: edit.text }],
+    () => null,
+  );
+  model.pushStackElement();
+  // Save now rather than waiting for autosave; saving starts the auto-compile.
+  await useWorkspace.getState().save(main);
+  if (!useCompile.getState().auto) void useCompile.getState().compile();
+  toast(`${main} now uses BibTeX for the bibliography.`);
+}
+
+/** A compile hint; one that carries a fix marker gets a button that applies it. */
+function Hint({ hint }: { hint: string }) {
+  const { fix, text } = parseHint(hint);
+  return (
+    <div className="mx-3 mt-3 flex gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm">
+      <Lightbulb size={15} className="mt-0.5 shrink-0 text-accent" />
+      <div className="min-w-0 flex-1">
+        <span>{text}</span>
+        {fix === "biblatex-bibtex" && (
+          <Button className="mt-2" onClick={() => void switchToBibtexBackend()}>
+            Use BibTeX backend
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** The right-hand pane: the PDF, the compile issues, and the logs. */
@@ -114,12 +169,7 @@ export function CompilePanel() {
       {noEngine || status === "noMainDocument" || tab === "pdf" ? null : tab === "issues" ? (
         <div className="min-h-0 flex-1 overflow-auto">
           {c.result?.rcIgnored && <TrustBanner onTrust={() => void c.trust()} />}
-          {c.result?.hints.map((h) => (
-            <div key={h} className="mx-3 mt-3 flex gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm">
-              <Lightbulb size={15} className="mt-0.5 shrink-0 text-accent" />
-              <span>{h}</span>
-            </div>
-          ))}
+          {c.result?.hints.map((h) => <Hint key={h} hint={h} />)}
           {issues.length > 0 && (
             <div className="flex gap-1 px-3 pt-3 pb-1 text-xs">
               {(
