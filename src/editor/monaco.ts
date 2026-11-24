@@ -10,6 +10,8 @@ import { registerLatexCompletions } from "./completions";
 import { bibtexConfig, bibtexTokens, latexConfig, latexTokens } from "./latexLanguage";
 import { texoDark, texoLight } from "./themes";
 import { attachMathHover } from "./mathHover";
+import { attachWheelPassthrough } from "./wheelPassthrough";
+import { registerCodeActions } from "./codeActions";
 import { getEditorPrefs } from "../lib/editorPrefs";
 import { onThemeChange, resolvedTheme, type Theme } from "../lib/theme";
 
@@ -29,13 +31,23 @@ monaco.editor.defineTheme("texo-dark", texoDark);
 monaco.editor.defineTheme("texo-light", texoLight);
 
 const completions = registerLatexCompletions();
-// In development, drop the old provider when this module hot-reloads.
-import.meta.hot?.dispose(() => completions.dispose());
+// Quick fixes for compile markers (a close citation key, a missing package).
+const codeActions = registerCodeActions();
+// In development, drop the old providers when this module hot-reloads.
+import.meta.hot?.dispose(() => {
+  completions.dispose();
+  codeActions.dispose();
+});
 
-// A rendered preview when the mouse rests on maths (Settings can turn it off).
+// A rendered preview when the mouse rests on maths (Settings can turn it off),
+// and a mouse wheel that scrolls the text even with a popup under the pointer.
 const hovers = monaco.editor.onDidCreateEditor((ed) => {
   const hover = attachMathHover(ed, () => getEditorPrefs().mathHover);
-  ed.onDidDispose(() => hover.dispose());
+  const wheel = attachWheelPassthrough(monaco, ed);
+  ed.onDidDispose(() => {
+    hover.dispose();
+    wheel.dispose();
+  });
 });
 import.meta.hot?.dispose(() => hovers.dispose());
 

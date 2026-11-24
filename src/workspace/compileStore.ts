@@ -12,13 +12,14 @@ import {
   type Toolchains,
 } from "../lib/api";
 import { monaco } from "../editor/monaco";
+import { MARKER_OWNER, markerSpan } from "../editor/markers";
 import { onProjectChanged, useWorkspace } from "./store";
 import { toast } from "../ui";
 
 const PREFS_KEY = "texo.compile";
 const MAX_OUTPUT_LINES = 4000;
 const AUTO_DELAY_MS = 300;
-const MARKER_OWNER = "texo-compile";
+export { MARKER_OWNER };
 
 /** Files whose changes are worth recompiling for. */
 const COMPILE_INPUT = /\.(tex|bib|sty|cls|bst|bbx|cbx|png|jpe?g|pdf|eps|svg|csv|dat|tikz|latexmkrc)$/i;
@@ -65,10 +66,16 @@ let modelListener: monaco.IDisposable | null = null;
 const pathOfModel = (model: monaco.editor.ITextModel) =>
   model.uri.scheme === "texo" ? model.uri.path.replace(/^\//, "") : null;
 
-function markersFor(issues: Issue[], path: string): monaco.editor.IMarkerData[] {
-  return issues
-    .filter((i) => i.file === path && i.line)
-    .map((i) => ({
+function markersFor(issues: Issue[], path: string, model: monaco.editor.ITextModel): monaco.editor.IMarkerData[] {
+  const markers: monaco.editor.IMarkerData[] = [];
+  for (const i of issues) {
+    if (i.file !== path || !i.line) continue;
+    const line = Math.min(i.line, model.getLineCount());
+    // A short span on the line (the cite key, the bad command), never the
+    // whole wrapped paragraph; layout boxes get none and stay in the Issues panel.
+    const span = markerSpan(i, model.getLineContent(line));
+    if (!span) continue;
+    markers.push({
       severity:
         i.severity === "error"
           ? monaco.MarkerSeverity.Error
@@ -76,19 +83,21 @@ function markersFor(issues: Issue[], path: string): monaco.editor.IMarkerData[] 
             ? monaco.MarkerSeverity.Warning
             : monaco.MarkerSeverity.Info,
       message: i.message,
-      startLineNumber: i.line!,
-      endLineNumber: i.line!,
-      startColumn: 1,
-      endColumn: 1000,
+      startLineNumber: line,
+      endLineNumber: line,
+      startColumn: span.startColumn,
+      endColumn: span.endColumn,
       source: "LaTeX",
-    }));
+    });
+  }
+  return markers;
 }
 
 /** Shows compile issues as squiggles in every open editor model. */
 function applyMarkers(issues: Issue[]) {
   for (const model of monaco.editor.getModels()) {
     const path = pathOfModel(model);
-    if (path) monaco.editor.setModelMarkers(model, MARKER_OWNER, markersFor(issues, path));
+    if (path) monaco.editor.setModelMarkers(model, MARKER_OWNER, markersFor(issues, path, model));
   }
 }
 
@@ -119,7 +128,7 @@ export const useCompile = create<CompileStore>((set, get) => {
       modelListener = monaco.editor.onDidCreateModel((model) => {
         const path = pathOfModel(model);
         const issues = get().result?.issues;
-        if (path && issues) monaco.editor.setModelMarkers(model, MARKER_OWNER, markersFor(issues, path));
+        if (path && issues) monaco.editor.setModelMarkers(model, MARKER_OWNER, markersFor(issues, path, model));
       });
       onProjectChanged((path) => {
         if (!get().auto || (path && !COMPILE_INPUT.test(path))) return;
@@ -160,6 +169,10 @@ export const useCompile = create<CompileStore>((set, get) => {
       const run = ++currentRun;
       set({ compiling: true, queued: false, output: [], error: null });
       await useWorkspace.getState().saveAll();
+      // Saving just now reported each file as changed, which armed the
+      // auto-compile timer; this run already has those edits, so drop it
+      // rather than queueing a second, identical compile.
+      clearTimeout(autoTimer);
       let result: CompileResult | null = null;
       let error: string | null = null;
       try {
