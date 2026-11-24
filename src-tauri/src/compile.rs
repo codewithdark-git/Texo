@@ -128,7 +128,8 @@ fn extra_dirs(tools_dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn find(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+/// Every copy of a program on PATH or in `dirs`, in search order.
+fn find_all(name: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
     let file = exe(name);
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
@@ -136,7 +137,39 @@ fn find(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         .iter()
         .chain(dirs)
         .map(|d| d.join(&file))
-        .find(|p| p.is_file())
+        .filter(|p| p.is_file())
+        .collect()
+}
+
+fn find(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    find_all(name, dirs).into_iter().next()
+}
+
+/// Where native Windows Perls live besides PATH: Strawberry Perl, and the
+/// Perl TeX Live bundles for its own scripts.
+fn perl_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("C:/Strawberry/perl/bin")];
+    if let Ok(entries) = std::fs::read_dir("C:/texlive") {
+        let mut years: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+        years.sort();
+        dirs.extend(years.into_iter().rev().map(|y| y.join("tlpkg/tlperl/bin")));
+    }
+    dirs
+}
+
+/// A Perl built for a Unix emulation layer: Git for Windows' MSYS Perl
+/// (`C:\Program Files\Git\usr\bin\perl.exe`), MSYS2, or Cygwin. These see
+/// paths as `/c/Users/...` and drop the drive letter from Windows paths,
+/// so latexmk run by them thinks the project's `.bib` files don't exist.
+pub fn is_unix_emulation_perl(path: &Path) -> bool {
+    let p = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    p.contains("cygwin") || (p.contains("/usr/bin/") && (p.contains("git") || p.contains("msys")))
+}
+
+/// The Perl to run latexmk with. On Windows a native Perl is required;
+/// with only an MSYS/Cygwin one, there is none (so latexmk isn't used).
+fn pick_perl(candidates: &[PathBuf], windows: bool) -> Option<PathBuf> {
+    candidates.iter().find(|p| !windows || !is_unix_emulation_perl(p)).cloned()
 }
 
 pub fn detect(tools_dir: &Path) -> Toolchains {
@@ -157,7 +190,7 @@ pub fn detect(tools_dir: &Path) -> Toolchains {
     });
     Toolchains {
         latexmk: find("latexmk", &dirs),
-        perl: find("perl", &dirs),
+        perl: pick_perl(&find_all("perl", &[dirs.clone(), perl_dirs()].concat()), cfg!(windows)),
         pdflatex,
         xelatex: find("xelatex", &dirs),
         lualatex: find("lualatex", &dirs),
@@ -181,8 +214,10 @@ impl Toolchains {
     }
 
     /// latexmk is a Perl script; MiKTeX's wrapper fails without Perl.
+    /// An MSYS/Cygwin Perl doesn't count on Windows (see [`is_unix_emulation_perl`]).
     fn latexmk_usable(&self) -> bool {
-        self.latexmk.is_some() && (self.perl.is_some() || self.distribution.as_deref() == Some("TeX Live"))
+        let native_perl = pick_perl(self.perl.as_slice(), cfg!(windows)).is_some();
+        self.latexmk.is_some() && (native_perl || self.distribution.as_deref() == Some("TeX Live"))
     }
 
     /// The toolchain to run, or None if nothing suitable is installed.
@@ -408,6 +443,158 @@ fn quoted_tool(path: &Path) -> String {
     format!("\"{}\"", path.to_string_lossy().replace('\\', "/"))
 }
 
+/// How the bibliography gets built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BibMode {
+    /// Run BibTeX/Biber whenever the document needs it.
+    Run,
+    /// No database is around but the project ships its `.bbl` (arXiv-style
+    /// sources do): use that and never run BibTeX, which would replace it
+    /// with an empty one.
+    ShippedBbl,
+}
+
+/// Decides [`BibMode`] from the databases the document names. latexmk's own
+/// check (`$bibtex_use=1`) silently skips BibTeX when it believes a `.bib`
+/// is missing, and gets that wrong on Windows, so it's always told what to
+/// do. When some database can't be found, BibTeX still runs so its real
+/// error is shown instead of a page of undefined citations.
+///
+/// The shipped `.bbl` is used only when the document names at least one
+/// database, none of them exists in the project or anywhere BibTeX searches
+/// (`found_elsewhere` asks kpsewhich: TEXMF trees, the user's BIBINPUTS),
+/// and the `.bbl` isn't left over from another editor's build, which would
+/// also leave a `.aux` or `.blg` beside it. Names Texo can't see (a resource
+/// added from a `.sty`, a macro) mean no names at all, so BibTeX runs.
+fn bib_mode(root: &Path, main_path: &Path, found_elsewhere: &dyn Fn(&str) -> bool) -> (BibMode, Option<PathBuf>) {
+    let bbl = main_path.with_extension("bbl");
+    // A plain file only: a link could point anywhere on the disk.
+    let shipped = std::fs::symlink_metadata(&bbl).is_ok_and(|m| m.file_type().is_file());
+    if !shipped {
+        return (BibMode::Run, None);
+    }
+    let build_leftovers = ["aux", "blg"].iter().any(|ext| main_path.with_extension(ext).exists());
+    if build_leftovers {
+        return (BibMode::Run, None);
+    }
+    let inputs = crate::bibinputs::BibInputs::find(root, main_path);
+    let nowhere = !inputs.entries.is_empty()
+        && inputs.none_found()
+        && !inputs.entries.iter().any(|(name, _)| found_elsewhere(name));
+    if nowhere {
+        (BibMode::ShippedBbl, Some(bbl))
+    } else {
+        (BibMode::Run, None)
+    }
+}
+
+/// Whether kpsewhich finds the database `name` on BibTeX's own search path
+/// (TEXMF trees, BIBINPUTS, MiKTeX's roots). Bounded by a short timeout so a
+/// hung kpsewhich can't stall the compile; on any failure it says "found",
+/// which keeps BibTeX running rather than trusting a stale `.bbl`.
+fn kpsewhich_finds(kpsewhich: &Path, name: &str, cwd: &Path) -> bool {
+    // A leading dash would be read as an option.
+    let arg = if name.starts_with('-') { format!("./{name}") } else { name.to_string() };
+    let mut cmd = Command::new(kpsewhich);
+    cmd.args(["-format=bib", &arg])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let Ok(mut child) = cmd.spawn() else { return true };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut out = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_string(&mut out);
+                }
+                return status.success() && !out.trim().is_empty();
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                return true;
+            }
+        }
+    }
+}
+
+/// The search path BibTeX and Biber use for `.bib` and `.bst` files: the
+/// main file's folder, then the project root. They run inside the build
+/// folder, so they'd otherwise not find the project's files. The trailing
+/// separator keeps the distribution's default search path too.
+fn bib_search_path(main_dir: &Path, root: &Path) -> String {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let mut dirs = vec![main_dir.to_string_lossy().into_owned()];
+    if crate::bibinputs::normalize(root) != crate::bibinputs::normalize(main_dir) {
+        dirs.push(root.to_string_lossy().into_owned());
+    }
+    let mut search = dirs.join(&sep.to_string());
+    search.push(sep);
+    search
+}
+
+/// PATH with `dir` first, so tools that look Perl up by name (MiKTeX's
+/// latexmk wrapper) get the native Perl Texo chose, not an MSYS one.
+fn path_with_first(dir: &Path) -> Option<String> {
+    let rest = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
+    let joined = std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(rest)).ok()?;
+    Some(joined.to_string_lossy().into_owned())
+}
+
+/// What direct mode does for the bibliography after the first TeX pass.
+#[derive(Debug, PartialEq)]
+enum DirectBib {
+    Skip,
+    Biber(PathBuf),
+    Bibtex(PathBuf),
+    /// The document needs a tool that isn't installed.
+    Missing(Issue),
+}
+
+fn bib_tool_missing(message: &str) -> Issue {
+    Issue {
+        severity: texlog::Severity::Error,
+        message: message.to_string(),
+        file: None,
+        line: None,
+        context: None,
+        citation: None,
+    }
+}
+
+/// Biber if biblatex wrote a `.bcf`, else BibTeX if the `.aux` asks for
+/// it; an error instead of silence when that tool isn't installed.
+fn direct_bib_step(bib: BibMode, has_bcf: bool, has_bibdata: bool, tools: &Toolchains) -> DirectBib {
+    if bib == BibMode::ShippedBbl {
+        return DirectBib::Skip;
+    }
+    if has_bcf {
+        return match &tools.biber {
+            Some(b) => DirectBib::Biber(b.clone()),
+            None => DirectBib::Missing(bib_tool_missing(
+                "This document uses biblatex with Biber, but Biber isn't installed, so citations stay undefined. Install Biber with your TeX distribution's package manager, or switch biblatex to its BibTeX backend (backend=bibtex).",
+            )),
+        };
+    }
+    if has_bibdata {
+        return match &tools.bibtex {
+            Some(b) => DirectBib::Bibtex(b.clone()),
+            None => DirectBib::Missing(bib_tool_missing(
+                "This document has a bibliography, but BibTeX isn't installed, so citations stay undefined. Install BibTeX with your TeX distribution's package manager.",
+            )),
+        };
+    }
+    DirectBib::Skip
+}
+
 fn latexmk_args(
     engine: Engine,
     build: &str,
@@ -415,6 +602,7 @@ fn latexmk_args(
     trusted: bool,
     user_rc: Option<&Path>,
     tools: &Toolchains,
+    bib: BibMode,
 ) -> Vec<String> {
     let mut args = Vec::new();
     if !trusted {
@@ -450,8 +638,13 @@ fn latexmk_args(
             args.push(format!("${var}=q{{{} {rest}}}", quoted_tool(path)));
         }
     }
+    let bib_flag = match bib {
+        BibMode::Run => "-bibtex",
+        BibMode::ShippedBbl => "-bibtex-",
+    };
     args.extend([
         engine_flag(engine).to_string(),
+        bib_flag.to_string(),
         "-f".to_string(),
         "-interaction=nonstopmode".to_string(),
         "-file-line-error".to_string(),
@@ -472,6 +665,17 @@ fn engine_flag(engine: Engine) -> &'static str {
 
 fn read_lossy(path: &Path) -> Option<String> {
     std::fs::read(path).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// The project file a BibTeX/Biber message points at. They log a database
+/// by the name `\bibliography` gave it, found through BIBINPUTS (the main
+/// file's folder, then the project root), so it's looked up the same way
+/// before being made project-relative.
+fn bib_issue_file(root: &Path, main_dir: &Path, logged: &str) -> Option<String> {
+    match crate::bibinputs::resolve(logged, main_dir, root) {
+        Some(found) => project_relative(root, main_dir, &found.to_string_lossy()),
+        None => project_relative(root, main_dir, logged),
+    }
 }
 
 /// Maps a path from a log (relative to the main file's folder, or absolute)
@@ -572,17 +776,44 @@ pub fn compile(job: &Job) -> CompileResult {
         }
     };
 
-    // BibTeX runs inside the build folder, so point it back at the sources.
-    // The trailing `;` keeps the distribution's default search path too.
-    let search = format!("{};", main_dir.to_string_lossy());
+    // BibTeX and Biber run inside the build folder, so point them back at the sources.
+    let search = bib_search_path(&main_dir, job.root);
     let bib_env = [("BIBINPUTS", search.clone()), ("BSTINPUTS", search.clone())];
+
+    // A shipped .bbl goes where TeX reads the bibliography from: the build folder.
+    let (bib, shipped_bbl) = match job.compiler {
+        Compiler::Tectonic => (BibMode::Run, None),
+        _ => {
+            let found_elsewhere = |name: &str| match &job.tools.kpsewhich {
+                Some(k) => kpsewhich_finds(k, name, &main_dir),
+                // Without kpsewhich there's no telling; let BibTeX look.
+                None => true,
+            };
+            bib_mode(job.root, &main_path, &found_elsewhere)
+        }
+    };
+    if let Some(bbl) = &shipped_bbl {
+        if let Err(e) = std::fs::copy(bbl, build.join(format!("{stem}.bbl"))) {
+            output.push(format!("Couldn't use the project's {stem}.bbl: {e}"));
+        } else {
+            output.push(format!("No .bib file found; using the project's {stem}.bbl."));
+        }
+    }
+    // Problems found before or around the TeX run, such as a missing Biber.
+    let mut extra_issues: Vec<Issue> = Vec::new();
 
     let ran = (|| -> std::io::Result<bool> {
         match job.compiler {
             Compiler::Latexmk => {
-                let args = latexmk_args(job.engine, &build_str, &main_file, job.trusted, user_latexmkrc().as_deref(), job.tools);
+                let args = latexmk_args(job.engine, &build_str, &main_file, job.trusted, user_latexmkrc().as_deref(), job.tools, bib);
                 let latexmk = job.tools.latexmk.as_ref().expect("checked by choose");
-                let end = run(latexmk, &args, &main_dir, &bib_env, job, deadline, &mut output)?;
+                let mut env = bib_env.to_vec();
+                if cfg!(windows) {
+                    if let Some(path) = job.tools.perl.as_deref().and_then(Path::parent).and_then(path_with_first) {
+                        env.push(("PATH", path));
+                    }
+                }
+                let end = run(latexmk, &args, &main_dir, &env, job, deadline, &mut output)?;
                 Ok(finish(end, &mut output, &mut result))
             }
             Compiler::Tectonic => {
@@ -616,18 +847,29 @@ pub fn compile(job: &Job) -> CompileResult {
                 // Bibliography: Biber if biblatex wrote a .bcf, else BibTeX if the .aux asks for it.
                 let aux = read_lossy(&build.join(format!("{stem}.aux"))).unwrap_or_default();
                 let mut bib_ran = false;
-                if build.join(format!("{stem}.bcf")).is_file() {
-                    if let Some(biber) = &job.tools.biber {
-                        let args = vec![format!("--input-directory={}", main_dir.to_string_lossy()), format!("--output-directory={build_str}"), stem.clone()];
-                        let end = run(biber, &args, &build, &[], job, deadline, &mut output)?;
+                let step = direct_bib_step(
+                    bib,
+                    build.join(format!("{stem}.bcf")).is_file(),
+                    aux.contains("\\bibdata"),
+                    job.tools,
+                );
+                match step {
+                    DirectBib::Skip => {}
+                    DirectBib::Missing(issue) => extra_issues.push(issue),
+                    DirectBib::Biber(biber) => {
+                        let args = vec![
+                            format!("--input-directory={}", main_dir.to_string_lossy()),
+                            format!("--output-directory={build_str}"),
+                            stem.clone(),
+                        ];
+                        let end = run(&biber, &args, &build, &bib_env, job, deadline, &mut output)?;
                         if !finish(end, &mut output, &mut result) {
                             return Ok(false);
                         }
                         bib_ran = true;
                     }
-                } else if aux.contains("\\bibdata") {
-                    if let Some(bibtex) = &job.tools.bibtex {
-                        let end = run(bibtex, std::slice::from_ref(&stem), &build, &bib_env, job, deadline, &mut output)?;
+                    DirectBib::Bibtex(bibtex) => {
+                        let end = run(&bibtex, std::slice::from_ref(&stem), &build, &bib_env, job, deadline, &mut output)?;
                         if !finish(end, &mut output, &mut result) {
                             return Ok(false);
                         }
@@ -663,13 +905,31 @@ pub fn compile(job: &Job) -> CompileResult {
     // Collect logs and issues even after a failed or stopped run.
     let log = read_lossy(&build.join(format!("{stem}.log"))).unwrap_or_default();
     let mut issues = texlog::parse_tex_log(&log);
-    if let Some(blg) = read_lossy(&build.join(format!("{stem}.blg"))) {
-        issues.extend(if blg.contains("Biber") { texlog::parse_biber_log(&blg) } else { texlog::parse_bibtex_log(&blg) });
-    }
     for issue in &mut issues {
         issue.file = issue.file.as_deref().and_then(|f| project_relative(job.root, &main_dir, f));
     }
+    if let Some(blg) = read_lossy(&build.join(format!("{stem}.blg"))) {
+        let mut bib_issues = if blg.contains("Biber") { texlog::parse_biber_log(&blg) } else { texlog::parse_bibtex_log(&blg) };
+        for issue in &mut bib_issues {
+            issue.file = issue.file.as_deref().and_then(|f| bib_issue_file(job.root, &main_dir, f));
+        }
+        issues.extend(bib_issues);
+    }
+    let mut bib_hints = Vec::new();
+    if job.compiler == Compiler::Tectonic {
+        if let Some(failure) = texlog::tectonic_biber_failure(&output.join("\n")) {
+            extra_issues.push(failure.issue);
+            // Only offer the backend switch when the backend is the problem;
+            // a missing or broken .bib would fail under BibTeX too.
+            if failure.backend_problem {
+                bib_hints.push(texlog::BIBLATEX_BIBTEX_HINT.to_string());
+            }
+        }
+    }
+    // Put bibliography failures first: they explain the undefined citations below.
+    issues.splice(0..0, extra_issues);
     result.hints = texlog::hints(&log, &issues);
+    result.hints.splice(0..0, bib_hints);
     result.issues = issues;
 
     // latexmk skips work when the PDF is already up to date, so an existing
@@ -703,10 +963,10 @@ mod tests {
     #[test]
     fn untrusted_projects_skip_their_latexmkrc() {
         let tools = Toolchains::default();
-        let trusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools);
+        let trusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools, BibMode::Run);
         assert!(!trusted.contains(&"-norc".to_string()));
         let rc = PathBuf::from("C:/Users/me/.latexmkrc");
-        let untrusted = latexmk_args(Engine::Xelatex, "B", "main.tex", false, Some(&rc), &tools);
+        let untrusted = latexmk_args(Engine::Xelatex, "B", "main.tex", false, Some(&rc), &tools, BibMode::Run);
         assert_eq!(&untrusted[..4], ["-norc", "-r", "C:/Users/me/.latexmkrc", "-xelatex"]);
         assert_eq!(untrusted.last().map(String::as_str), Some("main.tex"));
     }
@@ -719,14 +979,14 @@ mod tests {
             makeindex: Some(PathBuf::from(r"C:\Odd{dir}\makeindex.exe")),
             ..Default::default()
         };
-        let untrusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", false, None, &tools);
+        let untrusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", false, None, &tools, BibMode::Run);
         assert!(untrusted.contains(
             &r#"-pdflatex="C:/Program Files/MiKTeX/bin/pdflatex.exe" -no-shell-escape %O %S"#.to_string()
         ));
         assert!(untrusted.contains(&r#"$bibtex=q{"C:/MiKTeX/bibtex.exe" %O %S}"#.to_string()));
         // A path that can't be quoted safely is left out rather than mangled.
         assert!(!untrusted.iter().any(|a| a.contains("makeindex")));
-        let trusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools);
+        let trusted = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools, BibMode::Run);
         assert!(trusted.iter().any(|a| a.starts_with("-pdflatex=") && !a.contains("no-shell-escape")));
     }
 
@@ -771,6 +1031,121 @@ mod tests {
         // XeLaTeX missing even though pdfLaTeX exists.
         assert_eq!(tools(true, true, true, false).choose(Compiler::Auto, Engine::Xelatex), None);
         assert_eq!(tools(true, true, true, false).choose(Compiler::Tectonic, Engine::Pdflatex), None);
+    }
+
+    #[test]
+    fn recognises_unix_emulation_perls() {
+        for msys in [
+            r"C:\Program Files\Git\usr\bin\perl.exe",
+            r"C:\msys64\usr\bin\perl.exe",
+            r"C:\cygwin64\bin\perl.exe",
+            "D:/Tools/PortableGit/usr/bin/perl.exe",
+        ] {
+            assert!(is_unix_emulation_perl(Path::new(msys)), "{msys}");
+        }
+        for native in [
+            r"C:\Strawberry\perl\bin\perl.exe",
+            r"C:\texlive\2024\tlpkg\tlperl\bin\perl.exe",
+            "/usr/bin/perl",
+        ] {
+            assert!(!is_unix_emulation_perl(Path::new(native)), "{native}");
+        }
+    }
+
+    #[test]
+    fn prefers_a_native_perl_on_windows() {
+        let git = PathBuf::from(r"C:\Program Files\Git\usr\bin\perl.exe");
+        let strawberry = PathBuf::from(r"C:\Strawberry\perl\bin\perl.exe");
+        assert_eq!(pick_perl(&[git.clone(), strawberry.clone()], true), Some(strawberry));
+        assert_eq!(pick_perl(std::slice::from_ref(&git), true), None);
+        assert_eq!(pick_perl(std::slice::from_ref(&git), false), Some(git));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn msys_perl_alone_means_no_latexmk() {
+        let mut t = tools(true, true, true, false);
+        t.perl = Some(PathBuf::from(r"C:\Program Files\Git\usr\bin\perl.exe"));
+        assert_eq!(t.choose(Compiler::Auto, Engine::Pdflatex), Some(Compiler::Direct));
+        assert_eq!(t.choose(Compiler::Latexmk, Engine::Pdflatex), None);
+    }
+
+    #[test]
+    fn latexmk_is_told_whether_to_run_bibtex() {
+        let tools = Toolchains::default();
+        let run = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools, BibMode::Run);
+        assert!(run.contains(&"-bibtex".to_string()));
+        let shipped = latexmk_args(Engine::Pdflatex, "B", "main.tex", true, None, &tools, BibMode::ShippedBbl);
+        assert!(shipped.contains(&"-bibtex-".to_string()) && !shipped.contains(&"-bibtex".to_string()));
+    }
+
+    #[test]
+    fn picks_the_bibliography_mode_from_the_files_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "\\bibliography{refs}\n").unwrap();
+        let nowhere = |_: &str| false;
+        // Missing database, no .bbl: run BibTeX so its error shows.
+        assert_eq!(bib_mode(root, &main, &nowhere).0, BibMode::Run);
+        // arXiv-style: a .bbl and no .bib.
+        std::fs::write(root.join("main.bbl"), "\\begin{thebibliography}{1}\\end{thebibliography}").unwrap();
+        let (mode, bbl) = bib_mode(root, &main, &nowhere);
+        assert_eq!(mode, BibMode::ShippedBbl);
+        assert_eq!(bbl, Some(root.join("main.bbl")));
+        // A database BibTeX finds in a TEXMF tree (kpsewhich) isn't missing.
+        assert_eq!(bib_mode(root, &main, &|n: &str| n == "refs.bib").0, BibMode::Run);
+        // Another editor's build output next to the .bbl: it's not shipped.
+        std::fs::write(root.join("main.aux"), "\\bibdata{refs}").unwrap();
+        assert_eq!(bib_mode(root, &main, &nowhere).0, BibMode::Run);
+        std::fs::remove_file(root.join("main.aux")).unwrap();
+        // Once the database exists, BibTeX builds a fresh bibliography.
+        std::fs::write(root.join("refs.bib"), "@misc{k, title={T}}").unwrap();
+        assert_eq!(bib_mode(root, &main, &nowhere).0, BibMode::Run);
+        std::fs::remove_file(root.join("refs.bib")).unwrap();
+        // No database names Texo can see (say, added from a .sty): BibTeX runs.
+        std::fs::write(&main, "\\usepackage{mystyle}\n").unwrap();
+        assert_eq!(bib_mode(root, &main, &nowhere).0, BibMode::Run);
+    }
+
+    #[test]
+    fn bibtex_issues_point_at_the_database_bibinputs_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("paper")).unwrap();
+        std::fs::create_dir_all(root.join("bib")).unwrap();
+        std::fs::write(root.join("bib/shared.bib"), "").unwrap();
+        std::fs::write(root.join("paper/local.bib"), "").unwrap();
+        let main_dir = root.join("paper");
+        // Found from the project root, not next to main.tex.
+        assert_eq!(bib_issue_file(root, &main_dir, "bib/shared.bib").as_deref(), Some("bib/shared.bib"));
+        assert_eq!(bib_issue_file(root, &main_dir, "local.bib").as_deref(), Some("paper/local.bib"));
+        // Not on disk: mapped as before.
+        assert_eq!(bib_issue_file(root, &main_dir, "gone.bib").as_deref(), Some("paper/gone.bib"));
+    }
+
+    #[test]
+    fn bib_search_path_covers_main_folder_and_root() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let root = Path::new("/p/proj");
+        let main_dir = root.join("paper");
+        let search = bib_search_path(&main_dir, root);
+        assert_eq!(search, format!("{}{sep}{}{sep}", main_dir.to_string_lossy(), root.to_string_lossy()));
+        assert_eq!(bib_search_path(root, root), format!("{}{sep}", root.to_string_lossy()));
+    }
+
+    #[test]
+    fn direct_mode_reports_missing_bibliography_tools() {
+        let none = Toolchains::default();
+        let DirectBib::Missing(issue) = direct_bib_step(BibMode::Run, true, false, &none) else { panic!("expected an issue") };
+        assert_eq!(issue.severity, texlog::Severity::Error);
+        assert!(issue.message.contains("Biber isn't installed"));
+        assert!(matches!(direct_bib_step(BibMode::Run, false, true, &none), DirectBib::Missing(i) if i.message.contains("BibTeX isn't installed")));
+        assert_eq!(direct_bib_step(BibMode::Run, false, false, &none), DirectBib::Skip);
+        // A shipped .bbl is used as is.
+        assert_eq!(direct_bib_step(BibMode::ShippedBbl, false, true, &none), DirectBib::Skip);
+        let some = Toolchains { bibtex: Some(PathBuf::from("bibtex")), ..Default::default() };
+        assert_eq!(direct_bib_step(BibMode::Run, false, true, &some), DirectBib::Bibtex(PathBuf::from("bibtex")));
     }
 
     /// Compiles the example template with the TeX installed on this machine.
