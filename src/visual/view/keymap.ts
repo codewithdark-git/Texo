@@ -6,10 +6,11 @@ import { keymap } from "prosemirror-keymap";
 import { baseKeymap, chainCommands } from "prosemirror-commands";
 import { useWorkspace } from "../../workspace/store";
 import { syncToPdf } from "../../workspace/PdfViewer";
-import { enter, hardBreak, liftItem, setBlock, sinkItem, toggleMark, type GetEnv } from "./commands";
+import { enter, hardBreak, liftItem, setBlock, sinkItem, stepSize, toggleMark, type GetEnv } from "./commands";
 import { codeFence, undoInputRule } from "./inputRules";
 import * as actions from "./actions";
 import { activateNodeAt } from "./nodeviews/common";
+import { skipHiddenComments } from "./hiddenComments";
 
 /** Enter or Space on a selected atom opens its editor, as a click does. */
 const activateSelected: Command = (state, _dispatch, view) => {
@@ -32,6 +33,10 @@ export function buildKeymap(getEnv: GetEnv, hooks: KeymapHooks): Plugin[] {
       return true;
     };
 
+  // Hidden comments are atoms the base keys would silently delete.
+  const backOverComments = skipHiddenComments(-1);
+  const forwardOverComments = skipHiddenComments(1);
+
   const keys: Record<string, Command> = {
     "Mod-b": toggleMark(getEnv, "bold"),
     "Mod-i": toggleMark(getEnv, "italic"),
@@ -44,16 +49,23 @@ export function buildKeymap(getEnv: GetEnv, hooks: KeymapHooks): Plugin[] {
     "Mod-Alt-2": setBlock(getEnv, 2),
     "Mod-Alt-3": setBlock(getEnv, 3),
     "Mod-Alt-4": setBlock(getEnv, 4),
+    // Bigger and smaller text, as in Word.
+    "Mod-]": stepSize(getEnv, 1),
+    "Mod-[": stepSize(getEnv, -1),
     Tab: sinkItem(getEnv),
     "Shift-Tab": liftItem(getEnv),
     Enter: chainCommands(activateSelected, codeFence(getEnv), enter(getEnv)),
     Space: activateSelected,
     "Shift-Enter": hardBreak(getEnv),
-    Backspace: (state) => {
+    Backspace: chainCommands((state) => {
       const env = getEnv();
       if (!env || !state.selection.empty) return false;
       return undoInputRule(env);
-    },
+    }, backOverComments),
+    "Mod-Backspace": backOverComments,
+    "Shift-Backspace": backOverComments,
+    Delete: forwardOverComments,
+    "Mod-Delete": forwardOverComments,
     "Mod-s": () => {
       const path = getEnv()?.path;
       if (path) void useWorkspace.getState().save(path);

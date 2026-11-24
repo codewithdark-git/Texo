@@ -2,8 +2,9 @@
 // marks, maths, figures and tables, and package lines for the preamble.
 
 import { freshGid } from "../registry";
-import type { DialectHelpers, DocContext, MarkName } from "../types";
+import type { Align, DialectHelpers, DocContext, MarkName } from "../types";
 import { escapeLatex } from "./escape";
+import { COLOR_NAME, cssLength, isSizeCmd, spacingAmount } from "./style";
 
 const MARKS: Record<MarkName, [string, string] | null> = {
   bold: ["\\textbf{", "}"],
@@ -19,6 +20,8 @@ const MARKS: Record<MarkName, [string, string] | null> = {
 };
 
 const ENVS = { bullet: "itemize", ordered: "enumerate", description: "description" } as const;
+
+const ALIGN_ENVS: Record<Align, string> = { center: "center", left: "flushleft", right: "flushright" };
 
 /** The sectioning command for a UI heading level. */
 function headingCmd(level: 1 | 2 | 3 | 4, ctx: DocContext): string {
@@ -124,6 +127,47 @@ export const latexHelpers: DialectHelpers = {
     const line = `\\usepackage{${pkg}}` + ctx.eol;
     if (at === -1) return preambleSrc + ctx.eol + `\\usepackage{${pkg}}`;
     return preambleSrc.slice(0, at) + line + preambleSrc.slice(at);
+  },
+
+  sizeMark(cmd) {
+    if (!isSizeCmd(cmd)) return null;
+    return { open: `{\\${cmd} `, close: "}", gid: freshGid(), depth: 0, cmd };
+  },
+
+  colorMark(color) {
+    if (!COLOR_NAME.test(color)) return null;
+    return { open: `\\textcolor{${color}}{`, close: "}", gid: freshGid(), depth: 0, color, model: "" };
+  },
+
+  alignAttrs(align, ctx) {
+    const env = ALIGN_ENVS[align];
+    if (!env) return null;
+    // The same attrs the parser gives these environments, so a new one re-parses equal.
+    return {
+      kind: align === "center" ? "center" : "flush",
+      env,
+      label: env,
+      begin: `\\begin{${env}}`,
+      end: `\\end{${env}}`,
+      prefix: "",
+      gaps: [ctx.eol, ctx.eol],
+      align,
+    };
+  },
+
+  spacerAttrs(kind, _ctx, amount) {
+    if (kind === "pagebreak") return { src: "\\newpage", kind, amount: "" };
+    const len = amount ?? "12pt";
+    if (cssLength(len) === "" || /\\/.test(len)) return null;
+    const src = `\\vspace{${len}}`;
+    return { src, kind, amount: spacingAmount(src) };
+  },
+
+  spacingAttrs(kind) {
+    // A trailing space after a control word, as the parser reads "\noindent Text".
+    if (kind === "break") return { src: "\\\\", kind, amount: "" };
+    if (kind === "hspace") return { src: "\\quad ", kind, amount: "1em" };
+    return { src: "\\noindent ", kind, amount: "" };
   },
 
   setFigurePath(attrs, path) {

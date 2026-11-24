@@ -102,7 +102,11 @@ describe("structure", () => {
     expect(s.doc.firstChild!.attrs.trail).toBe("\\label{ch:bg}");
     const cmds: string[] = [];
     s.doc.forEach((n) => n.type.name === "command_block" && cmds.push(`${n.attrs.kind}:${n.attrs.target}`));
-    expect(cmds).toEqual(["input:sections/more", "pagebreak:"]);
+    expect(cmds).toEqual(["input:sections/more"]);
+    // \clearpage is a page break the view draws, not a command chip.
+    const spacers: string[] = [];
+    s.doc.forEach((n) => n.type.name === "spacer_block" && spacers.push(`${n.attrs.kind}:${n.attrs.src}`));
+    expect(spacers).toEqual(["pagebreak:\\clearpage"]);
   });
 
   it("keeps CRLF, a BOM and astral characters exactly", () => {

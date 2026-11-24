@@ -98,6 +98,11 @@ export function EditorPane() {
       tabSize: 2,
       padding: { top: 8 },
       smoothScrolling: true,
+      // A problem's hover waits a little, so it doesn't pop up wherever the
+      // mouse pauses while reading; it stays sticky so its links can be clicked.
+      hover: { delay: 600, sticky: true, hidingDelay: 300 },
+      // The lightbulb shows only where Texo has a quick fix for the code.
+      lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.OnCode },
     });
     editorRef.current = editor;
     editorBridge.editor = editor;

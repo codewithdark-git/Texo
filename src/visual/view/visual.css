@@ -1,5 +1,8 @@
-/* Visual mode: a readable page in the app's theme. Colours come from the
-   tokens in styles.css, so light and dark both work. */
+/* Visual mode: a word processor's page. The document sits on a white sheet
+   (paper-white with dark ink in both themes, as Word and Docs draw it) on a
+   neutral grey canvas. Its width, margins, type size and line spacing come
+   from the document's page setup as CSS variables (see pageStyle). Chrome
+   around the page (toolbar, popovers) keeps the app's theme. */
 
 .visual-pane {
   --v-chip-bg: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -9,42 +12,100 @@
   background: var(--bg);
 }
 
+.visual-pane .v-canvas {
+  background: color-mix(in srgb, var(--surface-2) 72%, #7f7f86);
+  padding: 24px 0 96px;
+}
+
+/* The sheet: the app's light tokens inside, whatever the app theme. */
+.v-page {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f1f2f5;
+  --border: #d6d9e0;
+  --text: #16171b;
+  --muted: #6a6f7c;
+  --accent: #3f51d9;
+  --accent-strong: #2f3fc4;
+  --danger: #c93030;
+  --v-chip-bg: color-mix(in srgb, #3f51d9 10%, transparent);
+  --v-chip-border: color-mix(in srgb, #3f51d9 30%, transparent);
+  --v-code-bg: #f1f2f5;
+  color-scheme: light;
+  position: relative;
+  box-sizing: border-box;
+  width: var(--v-page-width, 816px);
+  min-height: var(--v-page-min-height, 1056px);
+  margin: 0 auto;
+  padding: var(--v-pad-top, 96px) var(--v-pad-right, 96px) var(--v-pad-bottom, 96px) var(--v-pad-left, 96px);
+  background: #ffffff;
+  color: var(--text);
+  border-radius: 2px;
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 0.12),
+    0 6px 24px rgb(0 0 0 / 0.14);
+}
+
 .visual-doc {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: var(--visual-font-size, 16px);
-  line-height: 1.65;
+  font-family: var(--v-doc-font, KaTeX_Main, "Latin Modern Roman", Cambria, Georgia, serif);
+  font-size: var(--v-doc-font-size, var(--visual-font-size, 16px));
+  line-height: var(--v-line-height, 1.3);
   color: var(--text);
   outline: none;
-  min-height: 60vh;
-  caret-color: var(--accent);
+  min-height: 40vh;
+  caret-color: var(--text);
+  hyphens: auto;
+  text-align: justify;
+  overflow-wrap: break-word;
 }
+.v-markdown .visual-doc { text-align: left; }
 
 .visual-doc > * {
   content-visibility: auto;
   contain-intrinsic-size: auto 3em;
 }
+/* content-visibility clips to the box; these draw buttons and menus outside it. */
+.visual-doc > .v-preamble,
+.visual-doc > .v-include,
+.visual-doc > .v-raw-block { content-visibility: visible; }
 
+/* Paragraphs as LaTeX sets them: first-line indents (none after a heading), or space between. */
 .visual-doc p {
-  margin: 0 0 0.9em;
+  margin: 0;
   white-space: break-spaces;
 }
+.v-par-indent .visual-doc p + p { text-indent: 1.5em; }
+.v-par-space .visual-doc p { margin-bottom: 0.6em; }
+.v-markdown .visual-doc p { text-indent: 0; margin-bottom: 0.8em; }
 
+/* Headings sized like LaTeX's sectioning commands (article class). */
 .visual-doc .v-heading {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: inherit;
   font-weight: 700;
-  line-height: 1.25;
-  margin: 1.4em 0 0.5em;
+  line-height: 1.2;
+  margin: 1.3em 0 0.6em;
+  text-align: left;
+  hyphens: manual;
 }
-.visual-doc .v-h1 { font-size: 1.75em; }
-.visual-doc .v-h2 { font-size: 1.4em; }
-.visual-doc .v-h3 { font-size: 1.18em; }
-.visual-doc .v-h4 { font-size: 1.05em; font-style: italic; }
+.visual-doc .v-h1 { font-size: 1.44em; }
+.visual-doc .v-h2 { font-size: 1.2em; }
+.visual-doc .v-h3 { font-size: 1em; }
+.visual-doc .v-h4 { font-size: 1em; }
+.visual-doc .v-cmd-part { font-size: 2.49em; text-align: center; margin: 2em 0 1em; }
+.visual-doc .v-cmd-chapter { font-size: 2.07em; margin: 1.6em 0 1em; }
+.visual-doc .v-cmd-section { font-size: 1.44em; }
+.visual-doc .v-cmd-subsection { font-size: 1.2em; }
+.visual-doc .v-cmd-subsubsection { font-size: 1em; }
+.visual-doc .v-cmd-paragraph,
+.visual-doc .v-cmd-subparagraph { font-size: 1em; margin: 0.9em 0 0.2em; }
 .visual-doc .v-unnumbered::after {
   content: " *";
   color: var(--muted);
   font-weight: 400;
   font-size: 0.7em;
 }
+.visual-doc > :first-child + .v-heading,
+.visual-doc > .v-heading:first-child { margin-top: 0.4em; }
 
 .visual-doc .v-list { margin: 0 0 0.9em; padding-left: 1.6em; }
 .visual-doc ul.v-list { list-style: disc; }
@@ -185,39 +246,149 @@
 .visual-doc .v-math-error { color: var(--text); text-decoration: underline dotted var(--v-warn); text-underline-offset: 3px; }
 .visual-doc .v-math:hover { background: var(--v-chip-bg); border-radius: 4px; }
 
-.visual-doc .v-raw-block,
-.visual-doc .v-command,
-.visual-doc .v-table,
-.visual-doc .v-preamble {
+.visual-doc .v-table {
   font-family: system-ui, sans-serif;
   font-size: 0.85em;
-  margin: 0 0 0.9em;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  margin: 0.4em 0 0.9em;
 }
-.visual-doc .v-raw-block { padding: 0.3em 0.7em 0.5em; cursor: pointer; }
-.visual-doc .v-raw-label { font-size: 0.8em; color: var(--muted); margin-bottom: 0.2em; }
+
+/* LaTeX Visual mode can't draw itself: a picture from the PDF, or a quiet placeholder. */
+.visual-doc .v-raw-block {
+  position: relative;
+  margin: 0.5em 0 0.9em;
+  text-align: center;
+  border-radius: 4px;
+}
+.visual-doc .v-raw-block:hover,
+.visual-doc .v-table:hover,
+.visual-doc .v-command:hover { box-shadow: 0 0 0 1px var(--border); }
+.visual-doc .v-raw-placeholder {
+  display: block;
+  font-family: system-ui, sans-serif;
+  font-size: 0.78em;
+  color: var(--muted);
+  padding: 1.1em 1em;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: repeating-linear-gradient(135deg, transparent 0 8px, rgb(0 0 0 / 0.025) 8px 16px);
+  user-select: none;
+}
+.visual-doc .v-snapshot-slot { text-align: center; }
+.visual-doc .v-raw-snapshot { display: inline-block; max-width: 100%; height: auto; vertical-align: top; user-select: none; }
+.visual-doc .v-raw-more {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  opacity: 0;
+  line-height: 1;
+  padding: 0.15em 0.45em;
+}
+.visual-doc .v-raw-block:hover .v-raw-more,
+.visual-doc .v-raw-block.v-selected .v-raw-more,
+.visual-doc .v-raw-more:focus-visible,
+.visual-doc .v-raw-more[aria-expanded="true"] { opacity: 1; }
+.visual-doc .v-raw-menu {
+  position: absolute;
+  top: 1.9em;
+  right: 2px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 9em;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
+  text-align: left;
+}
+.visual-doc .v-raw-menu .v-menu-item { border: 0; text-align: left; padding: 0.3em 0.6em; background: transparent; }
+.visual-doc .v-raw-menu .v-menu-item:hover,
+.visual-doc .v-raw-menu .v-menu-item:focus-visible { background: var(--surface-2); outline: none; }
+.visual-doc .v-raw-inline {
+  cursor: default;
+  border-bottom: 1px dotted var(--muted);
+}
+.visual-doc .v-raw-inline.v-raw-empty {
+  font-family: system-ui, sans-serif;
+  font-size: 0.6em;
+  color: var(--muted);
+  vertical-align: middle;
+  border-bottom: 0;
+  padding: 0 0.2em;
+}
+/* A project macro that prints text reads like the text around it. */
+.visual-doc .v-raw-inline.v-macro-text { border-bottom: 0; border-radius: 3px; }
+.visual-doc .v-raw-inline.v-macro-text:hover { background: var(--v-chip-bg); }
+/* The old code look, kept for any view that still colours source. */
 .visual-doc .v-raw-src {
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 0.92em;
   white-space: pre-wrap;
   margin: 0;
   overflow-x: auto;
-}
-.visual-doc .v-raw-inline {
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 0.82em;
-  padding: 0 0.25em;
-  border-radius: 3px;
-  background: var(--v-code-bg);
-  color: var(--muted);
-  cursor: pointer;
+  text-align: left;
 }
 
-.visual-doc .v-command { display: flex; align-items: center; gap: 0.6em; padding: 0.35em 0.7em; cursor: pointer; }
-.visual-doc .v-command-title { font-weight: 600; }
-.visual-doc .v-command-src { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Command blocks: words, not code. */
+.visual-doc .v-command {
+  font-family: system-ui, sans-serif;
+  font-size: 0.75em;
+  color: var(--muted);
+  margin: 0.3em 0 0.7em;
+  padding: 0.25em 0.6em;
+  text-align: center;
+  border-radius: 4px;
+  user-select: none;
+}
+.visual-doc .v-command-title::before,
+.visual-doc .v-command-title::after { content: " — "; opacity: 0.5; }
+/* The title is drawn at the top of the page; its \maketitle marks only where it goes. */
+.visual-doc .v-c-maketitle { padding: 0; margin: 0; height: 0.6em; overflow: hidden; opacity: 0; }
+.visual-doc .v-c-maketitle:hover,
+.visual-doc .v-c-maketitle.v-selected { height: auto; opacity: 1; padding: 0.1em 0.6em; }
+
+/* An included file, drawn in place as part of the page. */
+.visual-doc .v-include {
+  font-family: inherit;
+  font-size: 1em;
+  color: inherit;
+  text-align: inherit;
+  padding: 0;
+  margin: 0;
+  position: relative;
+  user-select: auto;
+}
+.visual-doc .v-include:hover { box-shadow: -10px 0 0 -8px var(--accent); }
+.visual-doc .v-include-bar {
+  position: absolute;
+  top: -1.6em;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-family: system-ui, sans-serif;
+  font-size: 0.72rem;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 2;
+}
+.visual-doc .v-include:hover .v-include-bar,
+.visual-doc .v-include.v-selected .v-include-bar,
+.visual-doc .v-include-bar:focus-within { opacity: 1; }
+.visual-doc .v-include-body { pointer-events: none; }
+.visual-doc .v-include-doc { outline: none; white-space: normal; }
+.visual-doc .v-include-note {
+  font-family: system-ui, sans-serif;
+  font-size: 0.78em;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.6em;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+.visual-doc .v-include-missing .v-include-note { border-color: var(--v-warn); }
 
 .visual-doc .v-comment {
   font-style: italic;
@@ -227,39 +398,108 @@
   white-space: pre-wrap;
   margin: 0 0 0.6em;
   cursor: pointer;
+  text-align: left;
 }
-.v-hide-comments .visual-doc .v-comment { display: none; }
+/* A comment line inside a paragraph, on its own line. */
+.visual-doc .v-comment-inline {
+  display: block;
+  font-style: italic;
+  color: var(--muted);
+  opacity: 0.75;
+  font-size: 0.85em;
+  text-indent: 0;
+}
+/* Hidden comments take no room at all. */
+.v-hide-comments .visual-doc .v-comment,
+.v-hide-comments .visual-doc .v-comment-inline { display: none; }
 
-.visual-doc .v-preamble { padding: 0.4em 0.7em; border-style: solid; }
-.visual-doc .v-preamble-head { display: flex; align-items: center; gap: 0.6em; }
-.visual-doc .v-preamble-title { font-weight: 600; white-space: nowrap; }
-.visual-doc .v-preamble-meta { color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.visual-doc .v-preamble-head .v-btn { white-space: nowrap; flex-shrink: 0; }
-.visual-doc .v-preamble-fields { display: grid; gap: 0.4em; margin-top: 0.5em; }
-.visual-doc .v-field { display: flex; align-items: center; gap: 0.6em; }
-.visual-doc .v-field-name { width: 4.5em; color: var(--muted); }
-.visual-doc .v-field-input {
-  flex: 1;
-  height: 1.9em;
-  padding: 0 0.5em;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
-  color: var(--text);
-  outline: none;
+/* The top of the page: title block, and Page setup in the corner. */
+.visual-doc .v-preamble { position: relative; margin: 0 0 1.2em; }
+.visual-doc .v-preamble.v-preamble-empty { margin: 0; height: 0; }
+.visual-doc .v-page-setup {
+  position: absolute;
+  top: calc(-1 * var(--v-pad-top, 96px) + 8px);
+  right: calc(-1 * var(--v-pad-right, 96px) + 8px);
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  z-index: 3;
 }
-.visual-doc .v-field-input:focus { border-color: var(--accent); }
+.visual-doc .v-page-setup:hover,
+.visual-doc .v-page-setup:focus-visible { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+.visual-doc .v-titleblock { display: flex; flex-direction: column; align-items: stretch; text-align: center; margin: 0.6em 0 0.4em; }
+.visual-doc .v-title-input,
+.visual-doc .v-title-static {
+  font: inherit;
+  text-align: center;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0.05em 0.2em;
+  margin: 0;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  line-height: 1.25;
+}
+.visual-doc .v-title-input:hover { border-color: var(--border); }
+.visual-doc .v-title-input:focus { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.visual-doc .v-title-input::placeholder { color: var(--muted); opacity: 0.6; }
+.visual-doc .v-tb-title { font-size: 1.728em; margin-bottom: 0.5em; }
+.visual-doc .v-tb-author,
+.visual-doc .v-tb-date { font-size: 1.2em; margin-bottom: 0.3em; }
 .visual-doc .v-muted { color: var(--muted); }
 .visual-doc .v-postamble {
   font-family: system-ui, sans-serif;
-  font-size: 0.75em;
+  font-size: 0.7rem;
   color: var(--muted);
   text-align: center;
-  border-top: 1px dashed var(--border);
   padding-top: 0.4em;
-  margin-top: 1.5em;
+  margin-top: 2em;
+  opacity: 0.6;
   user-select: none;
 }
+
+/* Layout pieces: text sizes, colour, alignment, space and page breaks. */
+.visual-doc .v-size-tiny { font-size: 0.5em; }
+.visual-doc .v-size-scriptsize { font-size: 0.7em; }
+.visual-doc .v-size-footnotesize { font-size: 0.8em; }
+.visual-doc .v-size-small { font-size: 0.9em; }
+.visual-doc .v-size-normalsize { font-size: 1em; }
+.visual-doc .v-size-large { font-size: 1.2em; }
+.visual-doc .v-size-Large { font-size: 1.44em; }
+.visual-doc .v-size-LARGE { font-size: 1.728em; }
+.visual-doc .v-size-huge { font-size: 2.07em; }
+.visual-doc .v-size-Huge { font-size: 2.49em; }
+.visual-doc .v-color { color: var(--v-text-color, inherit); }
+.visual-doc .v-align-center { text-align: center; }
+.visual-doc .v-align-right { text-align: right; }
+.visual-doc .v-align-left { text-align: left; }
+.visual-doc .v-align-center p,
+.visual-doc .v-align-right p,
+.visual-doc .v-align-left p { text-indent: 0 !important; }
+.visual-doc .v-hspace { display: inline-block; min-width: 0.25em; height: 1em; vertical-align: baseline; }
+.visual-doc .v-hspace-fill { min-width: 2em; }
+.visual-doc .v-hspace:hover,
+.visual-doc .v-vspace:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.visual-doc .v-vspace { height: var(--v-gap, 1em); min-height: 4px; }
+.visual-doc .v-page-break {
+  display: flex;
+  align-items: center;
+  gap: 0.8em;
+  margin: 1.2em 0;
+  padding: 0;
+  font-family: system-ui, sans-serif;
+  font-size: 0.7rem;
+  color: var(--muted);
+  user-select: none;
+}
+.visual-doc .v-page-break::before,
+.visual-doc .v-page-break::after { content: ""; flex: 1; border-top: 1px dashed var(--muted); opacity: 0.6; }
 
 .visual-doc .v-btn {
   font-family: system-ui, sans-serif;
@@ -294,7 +534,8 @@
 .visual-doc .v-table { padding: 0.4em 0.7em 0.5em; }
 .visual-doc .v-table-bar { display: flex; align-items: center; gap: 0.4em; margin-bottom: 0.4em; }
 .visual-doc .v-spacer { flex: 1; }
-.visual-doc .v-table-grid { border-collapse: collapse; margin: 0 auto; font-family: Georgia, "Times New Roman", serif; font-size: 1.05em; }
+.visual-doc .v-table-wrap { max-width: 100%; overflow-x: auto; }
+.visual-doc .v-table-grid { border-collapse: collapse; margin: 0 auto; font-family: inherit; font-size: 1em; }
 .visual-doc .v-table-grid td { border: 1px solid var(--border); padding: 0.2em 0.6em; }
 .visual-doc .v-table-caption { text-align: center; color: var(--muted); margin-top: 0.4em; }
 
@@ -322,3 +563,40 @@
 .visual-doc .ProseMirror-gapcursor::after { border-top-color: var(--text); }
 
 .visual-popover .katex-display { margin: 0.2em 0; }
+
+/* Table tools appear on hover or selection, so the page reads as a page. */
+.visual-doc .v-table-bar { opacity: 0; transition: opacity 0.12s; }
+.visual-doc .v-table:hover .v-table-bar,
+.visual-doc .v-table.v-selected .v-table-bar,
+.visual-doc .v-table-bar:focus-within { opacity: 1; }
+.visual-doc .v-table-grid td { border-color: #c9ccd3; }
+
+/* Spacing commands inside text (the core's spacing atom). */
+.visual-doc .v-spacing-break::after,
+.visual-doc .v-spacing-vspace::after { content: "\A"; white-space: pre; }
+.visual-doc .v-spacing-vspace { display: inline-block; width: 100%; height: var(--v-gap, 0.8em); vertical-align: top; }
+.visual-doc .v-spacing-noindent { display: inline-block; width: 0; }
+.visual-doc .v-spacing-pagebreak { display: flex; width: 100%; }
+.visual-doc span.v-page-break { display: flex; }
+
+/* Environments as LaTeX prints them, not as boxes: a bold run-in name for
+   theorems and proofs, a centred heading for the abstract, plain text for
+   center / flushleft / flushright. Beamer frames and blocks keep their cards. */
+.visual-doc .v-container:not(.v-kind-frame):not(.v-kind-block) {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0.6em 0 0.9em;
+}
+.visual-doc .v-container:not(.v-kind-frame):not(.v-kind-block) > .v-container-label {
+  font-family: inherit;
+  font-size: 1em;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  margin-bottom: 0.15em;
+}
+.visual-doc .v-kind-abstract > .v-container-label { text-align: center; font-size: 0.9em; }
+.visual-doc .v-kind-abstract > .v-container-body { margin: 0 2.5em; font-size: 0.9em; }
+.visual-doc .v-kind-proof > .v-container-label { font-weight: 400; font-style: italic; }

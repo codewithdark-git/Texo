@@ -65,6 +65,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The tests include the guard that keeps the Support button in every release.
+      - name: Type-check and test
+        run: pnpm typecheck && pnpm test
+
       - name: Fetch the bundled LaTeX engine
         run: pnpm fetch-engine
 

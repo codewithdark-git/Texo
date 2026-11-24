@@ -2,13 +2,13 @@
 // About, as sections listed on the left. Every change applies at once.
 import { useEffect, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { FolderCog, Hammer, Info, Library, Minus, Palette, Plus, RefreshCw, Type, Files } from "lucide-react";
+import { FolderCog, Hammer, Heart, Info, Library, Minus, Palette, Plus, RefreshCw, Type, Files } from "lucide-react";
 import { api, errorText, type Compiler, type Toolchains } from "../lib/api";
 import { getEditorPrefs, onEditorPrefs, setEditorPrefs, type EditorPrefs } from "../lib/editorPrefs";
 import { getShowHidden, setShowHidden } from "../lib/hiddenFiles";
 import { getThemePref, onThemeChange, setThemePref, type ThemePref } from "../lib/theme";
 import { useApp } from "../store";
-import { toast } from "../ui";
+import { toast, useUi } from "../ui";
 import { useCompile } from "../workspace/compileStore";
 import { Button, Modal } from "./Dialog";
 import { changeProjectsRoot, Logo } from "./Sidebar";
@@ -151,9 +151,9 @@ function EditorSection() {
       <Row label="Formula preview on hover" help="Show the rendered formula when the pointer rests on maths.">
         <Toggle label="Formula preview on hover" checked={prefs.mathHover} onChange={(mathHover) => set({ mathHover })} />
       </Row>
-      <Row label="Show comments in Visual mode">
+      <Row label="Show LaTeX comments in Visual mode" help="Comments never appear in the PDF; Visual mode hides them unless this is on.">
         <Toggle
-          label="Show comments in Visual mode"
+          label="Show LaTeX comments in Visual mode"
           checked={prefs.visualShowComments}
           onChange={(visualShowComments) => set({ visualShowComments })}
         />
@@ -323,6 +323,7 @@ function ProjectsSection() {
 
 function AboutSection() {
   const [version, setVersion] = useState("");
+  const openDialog = useUi((s) => s.openDialog);
   useEffect(() => {
     getVersion().then(setVersion, () => {});
   }, []);
@@ -340,6 +341,12 @@ function AboutSection() {
         <dt className="text-muted">License</dt>
         <dd>MIT</dd>
       </dl>
+      {/* Every release keeps a visible way to support Texo (see support.test.ts). */}
+      <div className="mt-4">
+        <Button onClick={() => openDialog("support")}>
+          <Heart size={14} className="fill-current text-accent" /> Support Texo
+        </Button>
+      </div>
     </>
   );
 }

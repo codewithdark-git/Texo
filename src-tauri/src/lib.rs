@@ -1,4 +1,5 @@
 mod archive;
+mod bibinputs;
 mod commands;
 mod compile;
 mod engine;

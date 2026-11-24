@@ -18,7 +18,16 @@ export type {
   TabularCell,
   TabularModel,
   TabularOp,
+  Align,
+  SizeCmd,
 } from "./types";
+export type { SpacingKind } from "./latex/style";
+
+// Page look: font sizes, colours, spacing and alignment (LaTeX only).
+export { SIZE_COMMANDS, SIZE_SCALE, cssColor, cssLength, spacingAmount } from "./latex/style";
+export { alignOf, wrapAligned, unwrapAligned, setAlign } from "./latex/align";
+export { includeCandidates, resolveInclude } from "./latex/include";
+export { detachDeclarations, isDeclarationMark } from "./latex/marks";
 
 export { schema } from "./schema";
 export { readContext } from "./context";

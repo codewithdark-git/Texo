@@ -15,6 +15,7 @@ import { languageFor, monaco } from "../editor/monaco";
 import { baseName, isWithin, joinPath, parentDir, rebase } from "./paths";
 import { toast, trashName } from "../ui";
 import { getEditorPrefs } from "../lib/editorPrefs";
+import { setTextMacros } from "../visual/view/macroText";
 
 const AUTOSAVE_MS = 800;
 
@@ -175,6 +176,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     await api.unwatchProject().catch(() => {});
     for (const path of [...models.keys()]) disposeModel(path);
     completionSource.symbols = { labels: [], citations: [], commands: [] };
+    setTextMacros([]);
     completionSource.files = [];
     set({ project: null, files: [], tabs: [], active: null, views: {}, status: {}, cursor: null, modes: {} });
   }
@@ -271,6 +273,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       try {
         const symbols: Symbols = await api.projectSymbols(path);
         completionSource.symbols = symbols;
+        setTextMacros(symbols.textMacros ?? []);
       } catch {
         // Completions just stay as they were.
       }

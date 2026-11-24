@@ -66,6 +66,13 @@ export function frameTitle(node: PMNode): string {
   return title;
 }
 
+/** The LaTeX sectioning command behind a heading ("section"), or "" (Markdown, unknown). */
+export function headingCmd(node: PMNode): string {
+  const open = typeof node.attrs.open === "string" ? node.attrs.open : "";
+  const cmd = typeof node.attrs.cmd === "string" && node.attrs.cmd ? node.attrs.cmd : (/^\\([a-z]+)/.exec(open)?.[1] ?? "");
+  return /^(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)$/.test(cmd) ? cmd : "";
+}
+
 class HeadingView implements NodeView {
   dom: HTMLElement;
   contentDOM: HTMLElement;
@@ -73,12 +80,13 @@ class HeadingView implements NodeView {
     const level = Math.max(1, Math.min(4, (node.attrs.level as number) || 1));
     this.dom = this.contentDOM = el(`h${level}` as "h1", `v-heading v-h${level}`);
     if (/^\\[a-z]+\*/.test(node.attrs.open as string)) this.dom.classList.add("v-unnumbered");
-    this.dom.title = (node.attrs.open as string).replace(/\{$/, "").trim();
+    // Sized like LaTeX's own sectioning command (chapter, section, …) when the source names one.
+    const cmd = headingCmd(node);
+    if (cmd) this.dom.classList.add(`v-cmd-${cmd}`);
   }
   update(node: PMNode) {
-    if (node.type !== this.node.type || node.attrs.level !== this.node.attrs.level) return false;
+    if (node.type !== this.node.type || node.attrs.level !== this.node.attrs.level || headingCmd(node) !== headingCmd(this.node)) return false;
     this.node = node;
-    this.dom.title = (node.attrs.open as string).replace(/\{$/, "").trim();
     return true;
   }
 }
@@ -131,6 +139,12 @@ class ListItemView implements NodeView {
   }
 }
 
+/** "v-align-center" etc. for a container with an align attr, else "". */
+function alignClass(node: PMNode): string {
+  const a = node.attrs.align;
+  return a === "center" || a === "left" || a === "right" ? `v-align-${a}` : "";
+}
+
 class ContainerView implements NodeView {
   dom: HTMLElement;
   contentDOM: HTMLElement;
@@ -143,6 +157,9 @@ class ContainerView implements NodeView {
       return;
     }
     this.dom = el("div", `v-container v-kind-${kind.replace(/[^a-z0-9-]/gi, "")}`);
+    // center / flushleft / flushright (the core's align attr): the text aligns like Word's buttons.
+    const align = alignClass(node);
+    if (align) this.dom.classList.add(align);
     if (kind === "block") this.dom.classList.add(`v-env-${env.replace(/[^a-z]/gi, "")}`);
     this.head = el("div", kind === "frame" ? "v-frame-title" : "v-container-label");
     this.head.contentEditable = "false";
@@ -165,10 +182,9 @@ class ContainerView implements NodeView {
       this.head.textContent = title ? `${label} (${title})` : label;
       this.head.hidden = kind === "center" || kind === "flush";
     }
-    this.dom.title = (this.node.attrs.begin as string).trim();
   }
   update(node: PMNode) {
-    if (node.type !== this.node.type || node.attrs.kind !== this.node.attrs.kind) return false;
+    if (node.type !== this.node.type || node.attrs.kind !== this.node.attrs.kind || alignClass(node) !== alignClass(this.node)) return false;
     this.node = node;
     this.paintHead();
     return true;

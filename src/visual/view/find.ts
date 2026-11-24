@@ -27,7 +27,8 @@ const META = "texo.find";
 
 const EMPTY: FindQuery = { text: "", caseSensitive: false, wholeWord: false };
 const ATOM = "￼";
-const CODE_ATOMS = new Set(["raw_inline", "raw_block", "math_inline", "math_display", "table_block", "command_block", "comment_block"]);
+// Spacing atoms (\quad, \vspace{..}, \newpage) are code too: their source is counted, never matched as page text.
+const CODE_ATOMS = new Set(["raw_inline", "raw_block", "math_inline", "math_display", "table_block", "command_block", "comment_block", "spacing", "spacer_block"]);
 
 function escapeRe(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

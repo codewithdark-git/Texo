@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Heart } from "lucide-react";
 import { useApp } from "../store";
 import { trashName, useUi } from "../ui";
 import { WordCountDialog } from "../workspace/WordCountDialog";
@@ -100,6 +100,7 @@ function ShortcutsDialog({ onClose }: { onClose: () => void }) {
 }
 
 function AboutDialog({ onClose }: { onClose: () => void }) {
+  const openDialog = useUi((s) => s.openDialog);
   const [version, setVersion] = useState("");
   const engine = useApp((s) => s.engine);
   useEffect(() => {
@@ -137,6 +138,10 @@ function AboutDialog({ onClose }: { onClose: () => void }) {
         </Button>
         <Button onClick={() => void openUrl(`${REPO}/issues`)}>
           <ExternalLink size={14} /> Report a problem
+        </Button>
+        {/* Swaps this dialog for the support one, since only one global dialog shows at a time. */}
+        <Button onClick={() => openDialog("support")}>
+          <Heart size={14} className="fill-current text-accent" /> Support Texo
         </Button>
         <Button variant="primary" onClick={onClose}>
           Close

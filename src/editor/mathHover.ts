@@ -219,6 +219,9 @@ export function attachMathHover(editor: monaco.editor.ICodeEditor, enabled: () =
       timer = setTimeout(() => void show(pos).catch(() => hide()), 300);
     }),
     editor.onMouseLeave(hide),
+    // Like Monaco's own hovers (see wheelPassthrough), a click or the wheel
+    // closes the preview rather than leaving it over the text.
+    editor.onMouseDown(hide),
     editor.onDidScrollChange(hide),
     editor.onDidChangeModelContent(hide),
     editor.onDidChangeModel(hide),

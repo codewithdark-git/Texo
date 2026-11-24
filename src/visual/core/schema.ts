@@ -5,6 +5,7 @@
 
 import { Schema } from "prosemirror-model";
 import type { DOMOutputSpec, MarkSpec, NodeSpec, TagParseRule } from "prosemirror-model";
+import { cssColor, SIZE_SCALE } from "./latex/style";
 
 type AttrDefaults = Record<string, unknown>;
 
@@ -90,7 +91,8 @@ const nodes: Record<string, NodeSpec> = {
   container: node(
     "container",
     "div",
-    { kind: "quote", env: "quote", label: "", begin: "", end: "", prefix: "", gaps: [] },
+    // align: "center" | "left" | "right" for center / flushleft / flushright, else "".
+    { kind: "quote", env: "quote", label: "", begin: "", end: "", prefix: "", gaps: [], align: "" },
     { content: "block*", group: "block", defining: true },
   ),
   math_display: node("math_display", "div", { open: "\\[", body: "", close: "\\]", env: "" }, BLOCK_ATOM),
@@ -111,9 +113,17 @@ const nodes: Record<string, NodeSpec> = {
   raw_block: node("raw_block", "div", { src: "", label: "" }, BLOCK_ATOM),
   comment_block: node("comment_block", "div", { src: "" }, BLOCK_ATOM),
   command_block: node("command_block", "div", { src: "", kind: "", target: "" }, BLOCK_ATOM),
+  // A line that only adds vertical space or starts a new page (\vspace{..},
+  // \bigskip, \newpage, \clearpage). kind: "vspace" | "pagebreak"; amount is
+  // a CSS length hint ("6pt", "1.2em", "fill") or "".
+  spacer_block: node("spacer_block", "div", { src: "", kind: "vspace", amount: "" }, BLOCK_ATOM),
   text: { group: "inline" },
   softbreak: node("softbreak", "span", { src: "\n" }, INLINE_ATOM),
   glyph: node("glyph", "span", { src: "", display: "" }, INLINE_ATOM),
+  // Spacing and break commands inside text (\quad, \hspace{..}, \noindent,
+  // \\, \par, \newpage). kind: "hspace" | "vspace" | "noindent" | "break" |
+  // "pagebreak" | "thin"; amount as for spacer_block.
+  spacing: node("spacing", "span", { src: "", kind: "hspace", amount: "" }, INLINE_ATOM),
   math_inline: node("math_inline", "span", { open: "$", body: "", close: "$" }, INLINE_ATOM),
   cite: node("cite", "span", { src: "", cmd: "cite", keys: [] }, INLINE_ATOM),
   ref: node("ref", "span", { src: "", cmd: "ref", keys: [] }, INLINE_ATOM),
@@ -136,11 +146,24 @@ const CANONICAL: Record<string, [string, string]> = {
   sub: ["\\textsubscript{", "}"],
   strike: ["~~", "~~"],
   link: ["\\href{}{", "}"],
+  size: ["{\\normalsize ", "}"],
+  color: ["\\textcolor{black}{", "}"],
 };
 
-function mark(name: string, tag: string, cls: string | null, inclusive: boolean): MarkSpec {
+/**
+ * A mark spec. `extra` adds attrs beyond the spelling (a size's command, a
+ * colour's name) and `style` gives the inline CSS that shows the mark.
+ */
+function mark(
+  name: string,
+  tag: string,
+  cls: string | null,
+  inclusive: boolean,
+  extra: AttrDefaults = {},
+  style?: (attrs: Record<string, unknown>) => string | null,
+): MarkSpec {
   const isLink = name === "link";
-  const defaults: AttrDefaults = { open: CANONICAL[name][0], close: CANONICAL[name][1], gid: 0, depth: 0 };
+  const defaults: AttrDefaults = { open: CANONICAL[name][0], close: CANONICAL[name][1], gid: 0, depth: 0, ...extra };
   if (isLink) defaults.href = "";
   const selector = cls ? `${tag}.${cls}` : tag;
   const rules: TagParseRule[] = [
@@ -168,6 +191,9 @@ function mark(name: string, tag: string, cls: string | null, inclusive: boolean)
         "data-depth": String(m.attrs.depth),
       };
       if (cls) attrs.class = cls;
+      for (const k of Object.keys(extra)) attrs["data-" + k] = String(m.attrs[k]);
+      const css = style?.(m.attrs);
+      if (css) attrs.style = css;
       if (isLink) {
         // Never render a live href: a document could hold `javascript:` or
         // other unsafe URLs. The UI opens links through a click handler that
@@ -192,9 +218,19 @@ const marks: Record<string, MarkSpec> = {
   sub: mark("sub", "sub", null, true),
   strike: mark("strike", "s", null, true),
   link: mark("link", "a", null, false),
+  // {\large ..}: cmd is the size command's name.
+  size: mark("size", "span", "v-size", true, { cmd: "normalsize" }, (a) => {
+    const em = SIZE_SCALE[a.cmd as string];
+    return em ? `font-size: ${em}em` : null;
+  }),
+  // \textcolor{red}{..} or {\color{red} ..}: model is the optional [model].
+  color: mark("color", "span", "v-color", true, { color: "black", model: "" }, (a) => {
+    const css = cssColor(a.color as string, a.model as string);
+    return css ? `color: ${css}` : null;
+  }),
 };
 
 export const schema = new Schema({ nodes, marks });
 
 /** Block nodes that are atoms and serialize as their `src` attr. */
-export const SRC_ATOMS = new Set(["preamble", "postamble", "table_block", "raw_block", "comment_block", "command_block"]);
+export const SRC_ATOMS = new Set(["preamble", "postamble", "table_block", "raw_block", "comment_block", "command_block", "spacer_block"]);

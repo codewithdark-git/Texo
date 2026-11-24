@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
-import { createSession, schema, semEq, serializeNode, type Dialect } from "./index";
+import { createSession, helpersFor, schema, semEq, serializeNode, type Dialect } from "./index";
 import { codecFor } from "./dialects";
 
 const fixtures = import.meta.glob("./__fixtures__/*.{tex,md}", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -68,6 +68,37 @@ const LATEX_TOKENS: [number, string][] = [
   [1, "é"],
   [1, "中"],
   [1, "😀"],
+  // Page look: spacing, breaks, sizes, colours and alignment.
+  [2, "\\vspace{6pt}"],
+  [1, "\\vspace*{"],
+  [1, "\\hspace{1em}"],
+  [2, "\\noindent"],
+  [2, "\\quad"],
+  [1, "\\qquad "],
+  [1, "\\enspace"],
+  [1, "\\,"],
+  [1, "\\;"],
+  [1, "\\!"],
+  [2, "{,}"],
+  [1, "\\newpage"],
+  [1, "\\clearpage"],
+  [1, "\\pagebreak[4]"],
+  [1, "\\linebreak"],
+  [1, "\\hfill"],
+  [1, "\\medskip"],
+  [1, "\\bigskip"],
+  [2, "\\par"],
+  [1, "\\\\[2pt]"],
+  [2, "{\\LARGE\\bfseries "],
+  [2, "{\\large "],
+  [1, "{\\small "],
+  [2, "\\textcolor{red}{"],
+  [1, "{\\color{blue} "],
+  [1, "\\textsc{"],
+  [1, "\\begin{center}"],
+  [1, "\\end{center}"],
+  [1, "\\begin{flushright}"],
+  [1, "\\end{flushright}"],
 ];
 
 const MD_TOKENS: [number, string][] = [
@@ -209,6 +240,50 @@ describe("fuzz: inbound edits", () => {
         expect(a).toEqual(b);
       }),
       { numRuns: 200 },
+    );
+  });
+});
+
+describe("fuzz: outbound styling", () => {
+  it("a size, colour or bold change either plans exactly or is refused", () => {
+    const ctx = createSession("latex", "").context;
+    const helpers = helpersFor("latex");
+    const styles = [
+      () => schema.marks.size.create(helpers.sizeMark("large", ctx)!),
+      () => schema.marks.size.create(helpers.sizeMark("small", ctx)!),
+      () => schema.marks.color.create(helpers.colorMark("red", ctx)!),
+      () => schema.marks.bold.create(helpers.newMark("bold", ctx)!),
+    ];
+    const removable = [schema.marks.size, schema.marks.color, schema.marks.bold, schema.marks.italic];
+    fc.assert(
+      fc.property(fc.constantFrom(...texFixtures), fc.nat(), fc.nat(), fc.nat(), fc.nat({ max: 7 }), (text, k, x, y, op) => {
+        const s = createSession("latex", text);
+        const blocks: [number, number][] = [];
+        s.doc.descendants((n, pos) => {
+          if (n.isTextblock && !n.type.spec.code && n.content.size > 0) blocks.push([pos + 1, pos + 1 + n.content.size]);
+          return true;
+        });
+        if (blocks.length === 0) return;
+        const [lo, hi] = blocks[k % blocks.length];
+        const a = lo + (x % (hi - lo));
+        const b = a + 1 + (y % (hi - a));
+        const tr = new Transform(s.doc);
+        if (op < 4) tr.addMark(a, b, styles[op]());
+        else tr.removeMark(a, b, removable[op - 4]);
+        const res = s.plan(tr.doc);
+        if (!res.ok) return;
+        // Nothing outside the change moved, and the new text means what the doc shows.
+        const fresh = createSession("latex", res.newText);
+        const want: PMNode[] = [];
+        const got: PMNode[] = [];
+        tr.doc.forEach((n) => !(n.type.name === "paragraph" && n.content.size === 0) && want.push(n));
+        fresh.doc.forEach((n) => !(n.type.name === "paragraph" && n.content.size === 0) && got.push(n));
+        expect(got.length).toBe(want.length);
+        got.forEach((n, i) => expect(semEq(n, want[i])).toBe(true));
+        s.commit(tr.doc, res.newText);
+        expect(s.verify()).toEqual({ ok: true });
+      }),
+      { numRuns: 300 },
     );
   });
 });

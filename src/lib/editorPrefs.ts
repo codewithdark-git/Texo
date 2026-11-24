@@ -1,7 +1,7 @@
 // Editor preferences shared by the code editor, Visual mode, and Settings.
 export interface EditorPrefs { fontSize: number; wordWrap: boolean; defaultTexMode: "code" | "visual"; defaultMdMode: "code" | "visual"; mathHover: boolean; visualShowComments: boolean; displayMath: "brackets" | "equation" }
 const KEY = "texo.editor";
-export const DEFAULT_EDITOR_PREFS: EditorPrefs = { fontSize: 14, wordWrap: true, defaultTexMode: "code", defaultMdMode: "visual", mathHover: true, visualShowComments: true, displayMath: "brackets" };
+export const DEFAULT_EDITOR_PREFS: EditorPrefs = { fontSize: 14, wordWrap: true, defaultTexMode: "code", defaultMdMode: "visual", mathHover: true, visualShowComments: false, displayMath: "brackets" };
 export function getEditorPrefs(): EditorPrefs {
   try { return { ...DEFAULT_EDITOR_PREFS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") }; } catch { return { ...DEFAULT_EDITOR_PREFS }; }
 }
