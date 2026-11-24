@@ -4,7 +4,7 @@
 
 ![Texo: the LaTeX source on the left and the live PDF preview on the right](docs/screenshot.png)
 
-**[Download Texo 1.0 →](https://github.com/codewithdark-git/Texo/releases/latest)** for Windows and Linux.
+**[Download Texo 1.1 →](https://github.com/codewithdark-git/Texo/releases/latest)** for Windows and Linux.
 
 ## Why Texo
 
@@ -37,7 +37,6 @@
 - A toolbar and shortcuts for text style, headings, lists, links, maths, figures, tables and citations. Markdown-style typing works too: `# ` makes a heading, `- ` a list, `**bold**` bold.
 - It edits the same source as Code mode, with one undo history. Anything it doesn't render stays as editable source, and nothing you didn't touch is rewritten.
 - Markdown files open in Visual mode and LaTeX files in Code mode by default; change this in Settings.
-<!-- verify -->
 - **A word processor for LaTeX:** Visual mode shows your document as pages with no code in sight. A ribbon sets font size, colour, alignment and page breaks, and **Page setup** sets paper, margins, orientation, font, line spacing and columns. Included files show inline, and the PDF updates as you type.
 
 ### Editor
