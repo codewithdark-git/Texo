@@ -213,7 +213,7 @@ function Setup({ req, close }: { req: PageSetupRequest; close(): void }) {
             ))}
           </div>
         )}
-        <Field label="Columns">
+        <Field label="Columns" help="In the PDF. You keep writing in one column here.">
           <Segments
             label="Columns"
             disabled={layoutOff}

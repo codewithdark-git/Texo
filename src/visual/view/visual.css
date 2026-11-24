@@ -78,12 +78,6 @@
 .v-par-space .visual-doc p { margin-bottom: 0.6em; }
 .v-markdown .visual-doc p { text-indent: 0; margin-bottom: 0.8em; }
 
-/* Two columns, like the twocolumn class option; the title block spans both. */
-.v-cols-2 .visual-doc { column-count: 2; column-gap: 0.35in; }
-.v-cols-2 .visual-doc > .v-preamble,
-.v-cols-2 .visual-doc > .v-postamble { column-span: all; }
-.v-cols-2 .visual-doc > * { content-visibility: visible; }
-
 /* Headings sized like LaTeX's sectioning commands (article class). */
 .visual-doc .v-heading {
   font-family: inherit;

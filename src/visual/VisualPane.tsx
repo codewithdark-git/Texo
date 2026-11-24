@@ -330,7 +330,9 @@ export default function VisualPane({ path }: { path: string }) {
           </div>
         ) : (
           <div
-            className={`v-page ${setup.columns === 2 ? "v-cols-2" : ""} ${setup.parStyle === "space" ? "v-par-space" : "v-par-indent"} ${env?.dialect === "markdown" ? "v-markdown" : ""}`}
+            // Always one column: writing flows top to bottom whatever the PDF's
+            // layout (two columns, say), which Page setup sets for the output only.
+            className={`v-page ${setup.parStyle === "space" ? "v-par-space" : "v-par-indent"} ${env?.dialect === "markdown" ? "v-markdown" : ""}`}
             style={page}
             role="document"
             aria-label="Page"
