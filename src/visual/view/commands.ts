@@ -1,14 +1,30 @@
 // Editing commands for Visual mode. Everything new is spelled by the dialect
 // helpers, so what lands in the file is ordinary LaTeX or Markdown.
 
-import { NodeSelection, TextSelection, type Command, type EditorState, type Transaction } from "prosemirror-state";
+import { NodeSelection, Selection, TextSelection, type Command, type EditorState, type Transaction } from "prosemirror-state";
 import { Fragment, type Mark, type MarkType, type Node as PMNode, type NodeType } from "prosemirror-model";
 import type { EditorView } from "prosemirror-view";
 import { chainCommands, liftEmptyBlock, splitBlock } from "prosemirror-commands";
 import { liftListItem, sinkListItem, splitListItem } from "prosemirror-schema-list";
-import { schema, type Dialect, type DialectHelpers, type MarkName, type VisualSession } from "../core";
+import {
+  alignOf,
+  atoms,
+  detachDeclarations,
+  schema,
+  setAlign,
+  SIZE_COMMANDS,
+  unwrapAligned,
+  wrapAligned,
+  type Align,
+  type Dialect,
+  type DialectHelpers,
+  type MarkName,
+  type SizeCmd,
+  type VisualSession,
+} from "../core";
 import type { Binding } from "./binding";
 import { NEW_UNDO_STEP } from "./binding";
+import { ensurePackage as addPackageLine, hasPackage } from "./pageSetup";
 
 /** What commands, plugins and node views need to know about the open file. */
 export interface VisualEnv {
@@ -119,14 +135,7 @@ export function setBlock(getEnv: GetEnv, level: 0 | 1 | 2 | 3 | 4): Command {
     if (!dispatch) return true;
     const tr = state.tr;
     if (level === 0) {
-      tr.setNodeMarkup(pos, N.paragraph, null);
-      const trail = node.attrs.trail as string;
-      if (trail) {
-        // What followed the title (\label{..}, a comment) stays, as inline content.
-        const end = pos + node.nodeSize - 1;
-        const frag = env.session.parseInlineSnippet(trail);
-        tr.insert(end, frag.size ? frag : N.raw_inline.create({ src: trail, label: "LaTeX" }));
-      }
+      headingToParagraph(env, tr, pos);
     } else {
       const prev = node.type === N.heading ? (node.attrs as Record<string, unknown>) : undefined;
       tr.setNodeMarkup(pos, N.heading, env.helpers.headingAttrs(level, env.session.context, prev));
@@ -134,6 +143,19 @@ export function setBlock(getEnv: GetEnv, level: 0 | 1 | 2 | 3 | 4): Command {
     dispatch(tr.setMeta(NEW_UNDO_STEP, true));
     return true;
   };
+}
+
+/** Turns the heading at `pos` into a paragraph. What followed the title (\label{..}, a comment) stays, as inline content. */
+function headingToParagraph(env: VisualEnv, tr: Transaction, pos: number) {
+  const node = tr.doc.nodeAt(pos);
+  if (!node || node.type !== N.heading) return;
+  tr.setNodeMarkup(pos, N.paragraph, null);
+  const trail = node.attrs.trail as string;
+  if (trail) {
+    const end = pos + node.nodeSize - 1;
+    const frag = env.session.parseInlineSnippet(trail);
+    tr.insert(end, frag.size ? frag : N.raw_inline.create({ src: trail, label: "LaTeX" }));
+  }
 }
 
 export type ListKind = "bullet" | "ordered" | "description";
@@ -361,14 +383,337 @@ export function hardBreak(getEnv: GetEnv): Command {
     if (!env || !$from.parent.inlineContent || $from.parent.type.spec.code) return false;
     if (!dispatch) return true;
     const eol = env.session.context.eol;
-    const src = isLatex(env) ? "\\\\" : "\\";
-    const tr = state.tr.replaceSelectionWith(N.raw_inline.create({ src, label: "line break" }), false);
+    // LaTeX's \\ is a spacing atom (drawn as a line break, never as code); Markdown's "\" stays a raw piece.
+    const spacing = isLatex(env) && N.spacing ? env.helpers.spacingAttrs("break", env.session.context) : null;
+    const brk = spacing ? N.spacing.create(spacing) : N.raw_inline.create({ src: isLatex(env) ? "\\\\" : "\\", label: "line break" });
+    const tr = state.tr.replaceSelectionWith(brk, false);
     const at = tr.selection.from;
     tr.insert(at, N.softbreak.create({ src: eol }));
     tr.setSelection(TextSelection.create(tr.doc, at + 1));
     dispatch(tr.setMeta(NEW_UNDO_STEP, true).scrollIntoView());
     return true;
   };
+}
+
+// -----------------------------------------------------------------------------
+// Page look: font size, text colour, alignment, styles (LaTeX only; the
+// Markdown helpers return null for all of these, so the commands refuse).
+
+/** The first `type` mark in the selection (or at the cursor), or null. */
+export function markAt(state: EditorState, type: MarkType): Mark | null {
+  const { from, to, empty, $from } = state.selection;
+  if (empty) return type.isInSet(state.storedMarks || $from.marks()) ?? null;
+  let found: Mark | null = null;
+  state.doc.nodesBetween(from, to, (n) => {
+    if (found) return false;
+    if (n.isInline) found = type.isInSet(n.marks) ?? null;
+    return !found;
+  });
+  return found;
+}
+
+/** The size at the selection ("large"), or null for the body size. */
+export function sizeAt(state: EditorState): SizeCmd | null {
+  if (!M.size) return null;
+  return (markAt(state, M.size)?.attrs.cmd as SizeCmd | undefined) ?? null;
+}
+
+/** The colour name at the selection ("red"), or null for automatic. */
+export function colorAt(state: EditorState): string | null {
+  if (!M.color) return null;
+  return (markAt(state, M.color)?.attrs.color as string | undefined) ?? null;
+}
+
+/**
+ * Hand-set groups such as {\LARGE\bfseries Title\par} spell their bold as a
+ * declaration that only works for the whole group. When a change leaves the
+ * plan unable to write such a block back, the textblocks in the range are
+ * respelled the canonical way (\textbf{..}) and the selection is kept.
+ */
+function detachIfRefused(env: VisualEnv, tr: Transaction, from: number, to: number) {
+  if (env.session.plan(tr.doc).ok) return;
+  const blocks: { pos: number; node: PMNode }[] = [];
+  tr.doc.nodesBetween(from, to, (n, pos) => {
+    if (n.isTextblock) {
+      blocks.push({ pos, node: n });
+      return false;
+    }
+    return true;
+  });
+  const sel = tr.selection;
+  const respell = (fix: (block: PMNode) => PMNode) => {
+    for (const b of [...blocks].reverse()) {
+      const now = tr.doc.nodeAt(b.pos)!;
+      const fresh = fix(now);
+      if (fresh !== now) tr.replaceWith(b.pos, b.pos + now.nodeSize, fresh);
+    }
+    // Same sizes, so the old positions still point at the same text.
+    tr.setSelection(TextSelection.create(tr.doc, sel.from, sel.to));
+  };
+  respell((b) => detachDeclarations(b, env.session.context));
+  if (env.session.plan(tr.doc).ok) return;
+  // A size whose spelling ran straight into the next command ({\LARGE\bfseries)
+  // now meets text instead, and TeX would eat a space there: spell it {\LARGE ..}.
+  respell((b) => respellBareSizes(env, b));
+}
+
+/** The textblock with each size mark spelled "{\large" (no space) respelled "{\large ". */
+function respellBareSizes(env: VisualEnv, block: PMNode): PMNode {
+  if (!M.size) return block;
+  const fresh = new Map<string, Mark>();
+  let changed = false;
+  const kids: PMNode[] = [];
+  block.forEach((child) => {
+    const m = M.size.isInSet(child.marks);
+    if (!m || !/\\[A-Za-z]+$/.test(m.attrs.open as string)) return void kids.push(child);
+    const key = JSON.stringify(m.attrs);
+    let next = fresh.get(key);
+    if (!next) {
+      const attrs = env.helpers.sizeMark(m.attrs.cmd as SizeCmd, env.session.context);
+      if (!attrs) return void kids.push(child);
+      next = M.size.create(attrs);
+      fresh.set(key, next);
+    }
+    changed = true;
+    const rest = m.removeFromSet(child.marks);
+    // TeX drops spaces right after "{\large ": a run's leading space goes before the group.
+    const prev = kids[kids.length - 1];
+    const lead = child.isText && !(prev && next.isInSet(prev.marks)) ? /^\s+/.exec(child.text!)?.[0] : undefined;
+    if (lead && lead.length < child.text!.length) {
+      kids.push(schema.text(lead, rest));
+      kids.push(schema.text(child.text!.slice(lead.length), next.addToSet(rest)));
+    } else kids.push(child.mark(next.addToSet(rest)));
+  });
+  return changed ? block.type.create(block.attrs, kids, block.marks) : block;
+}
+
+/**
+ * Adds \usepackage{pkg} to the preamble in `tr` when it isn't loaded yet,
+ * through Page setup's minimal preamble edit. True when a line was added.
+ * A file without a preamble (a chapter) relies on its main document.
+ */
+export function ensurePreamblePackage(env: VisualEnv, tr: Transaction, pkg: string): boolean {
+  const first = tr.doc.firstChild;
+  if (!isLatex(env) || !first || first.type !== N.preamble) return false;
+  const src = first.attrs.src as string;
+  if (hasPackage(src, pkg)) return false;
+  const next = fileEol(env, addPackageLine(src, pkg));
+  if (next === src) return false;
+  tr.setNodeMarkup(0, null, atoms.setRawSrc(first.attrs, next));
+  return true;
+}
+
+/** Sets (attrs) or clears (null) a page-look mark over the selection, or for what is typed next. */
+function lookMark(getEnv: GetEnv, type: MarkType | undefined, attrsFor: (env: VisualEnv) => Record<string, unknown> | null, clear: boolean, pkg?: string): Command {
+  return (state, dispatch) => {
+    const env = getEnv();
+    if (!env || !isLatex(env) || !type) return false;
+    const { from, to, empty, $from } = state.selection;
+    if (!$from.parent.inlineContent || $from.parent.type.spec.code) return false;
+    const attrs = clear ? null : attrsFor(env);
+    if (!clear && !attrs) return false;
+    if (!dispatch) return true;
+    const tr = state.tr;
+    const added = attrs && pkg ? ensurePreamblePackage(env, tr, pkg) : false;
+    if (empty) {
+      // Stored marks last: a document step clears them.
+      const marks = type.isInSet(state.storedMarks || $from.marks()) ? type.removeFromSet(state.storedMarks || $from.marks()) : state.storedMarks || $from.marks();
+      tr.setStoredMarks(attrs ? type.create(attrs).addToSet(marks) : marks);
+    } else {
+      tr.removeMark(from, to, type);
+      if (attrs) tr.addMark(from, to, type.create(attrs));
+      detachIfRefused(env, tr, from, to);
+    }
+    dispatch(tr.setMeta(NEW_UNDO_STEP, true));
+    if (added) env.toast(`Added \\usepackage{${pkg}}`, "info");
+    return true;
+  };
+}
+
+/** Font size for the selection; null (or "normalsize") goes back to the body size. */
+export function setSize(getEnv: GetEnv, cmd: SizeCmd | null): Command {
+  const clear = cmd === null || cmd === "normalsize";
+  return lookMark(getEnv, M.size, (env) => env.helpers.sizeMark(cmd as SizeCmd, env.session.context), clear);
+}
+
+/** One size up or down from the selection's (Ctrl+] and Ctrl+[, as in Word). */
+export function stepSize(getEnv: GetEnv, dir: 1 | -1): Command {
+  return (state, dispatch, view) => {
+    const now = SIZE_COMMANDS.indexOf(sizeAt(state) ?? "normalsize");
+    const next = SIZE_COMMANDS[Math.max(0, Math.min(SIZE_COMMANDS.length - 1, now + dir))];
+    if (next === SIZE_COMMANDS[now]) return false;
+    return setSize(getEnv, next)(state, dispatch, view);
+  };
+}
+
+/** Text colour for the selection (an xcolor name); null is automatic. Loads xcolor when needed. */
+export function setColor(getEnv: GetEnv, color: string | null): Command {
+  return lookMark(getEnv, M.color, (env) => env.helpers.colorMark(color as string, env.session.context), color === null, "xcolor");
+}
+
+/** The alignment box around the cursor, with its position. */
+function alignedAround(state: EditorState): { node: PMNode; pos: number } | null {
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const n = $from.node(d);
+    if (alignOf(n)) return { node: n, pos: $from.before(d) };
+  }
+  return null;
+}
+
+/** "center" | "left" | "right" around the cursor, or null for the document's own (justified). */
+export function alignAt(state: EditorState): Align | null {
+  const box = alignedAround(state);
+  return box ? alignOf(box.node) : null;
+}
+
+/** Keeps a selection near where it was after the blocks around it moved by `shift`. */
+function keepSelection(tr: Transaction, from: number, to: number, shift: number) {
+  const size = tr.doc.content.size;
+  const clamp = (p: number) => Math.max(0, Math.min(size, p + shift));
+  try {
+    tr.setSelection(TextSelection.between(tr.doc.resolve(clamp(from)), tr.doc.resolve(clamp(to))));
+  } catch {
+    tr.setSelection(Selection.near(tr.doc.resolve(clamp(from))));
+  }
+}
+
+/**
+ * Aligns the paragraphs in the selection. Inside an aligned box the box
+ * switches (\begin{center} to \begin{flushright}); the active alignment
+ * again removes it. Otherwise the selected blocks are wrapped in one.
+ */
+export function setAlignment(getEnv: GetEnv, align: Align): Command {
+  return (state, dispatch) => {
+    const env = getEnv();
+    if (!env || !isLatex(env) || !env.helpers.alignAttrs(align, env.session.context)) return false;
+    const { from, to, $from, $to } = state.selection;
+    const box = alignedAround(state);
+    if (box) {
+      if (!dispatch) return true;
+      const tr = state.tr;
+      if (alignOf(box.node) === align) {
+        const inner = unwrapAligned(box.node);
+        if (!inner) return false;
+        tr.replaceWith(box.pos, box.pos + box.node.nodeSize, inner);
+        keepSelection(tr, from, to, -1);
+      } else {
+        const next = setAlign(box.node, align, env.session.context);
+        if (!next) return false;
+        tr.setNodeMarkup(box.pos, null, next.attrs);
+      }
+      dispatch(tr.setMeta(NEW_UNDO_STEP, true));
+      return true;
+    }
+    const range = $from.blockRange($to);
+    if (!range) return false;
+    const blocks: PMNode[] = [];
+    for (let i = range.startIndex; i < range.endIndex; i++) blocks.push(range.parent.child(i));
+    if (blocks.some((b) => b.type === N.preamble || b.type === N.postamble)) return false;
+    const wrapped = wrapAligned(blocks, align, env.session.context);
+    if (!wrapped || !range.parent.canReplace(range.startIndex, range.endIndex, Fragment.from(wrapped))) return false;
+    if (!dispatch) return true;
+    const tr = state.tr.replaceWith(range.start, range.end, wrapped);
+    keepSelection(tr, from, to, 1);
+    dispatch(tr.setMeta(NEW_UNDO_STEP, true));
+    return true;
+  };
+}
+
+/** The ribbon's paragraph styles. */
+export type StyleKey = "paragraph" | "title" | "h1" | "h2" | "h3" | "h4";
+
+const TITLE_SIZES = new Set(["LARGE", "huge", "Huge"]);
+
+/** A paragraph whose text is all set large (a hand-made title, or the Title style). */
+function titleLike(node: PMNode): boolean {
+  if (node.type !== N.paragraph || !M.size) return false;
+  let any = false;
+  let all = true;
+  node.forEach((c) => {
+    if (!c.isText) return;
+    any = true;
+    const s = M.size.isInSet(c.marks);
+    if (!s || !TITLE_SIZES.has(s.attrs.cmd as string)) all = false;
+  });
+  return any && all;
+}
+
+/** The style at the cursor for the Styles menu, or null inside something else (a table cell, code). */
+export function styleAt(state: EditorState): StyleKey | null {
+  const level = blockLevel(state);
+  if (level < 0) return null;
+  if (level > 0) return `h${level}` as StyleKey;
+  return titleLike(state.selection.$from.parent) ? "title" : "paragraph";
+}
+
+/**
+ * Applies a paragraph style. Headings are LaTeX's sectioning commands; Title
+ * is a large bold paragraph, centred ({\LARGE \textbf{..}} in a center box);
+ * Paragraph turns a heading back into text, or a Title back into plain text.
+ */
+export function setStyle(getEnv: GetEnv, style: StyleKey): Command {
+  if (style !== "paragraph" && style !== "title") return setBlock(getEnv, Number(style[1]) as 1 | 2 | 3 | 4);
+  return (state, dispatch, view) => {
+    const env = getEnv();
+    const tb = textblockAt(state);
+    if (!env || !tb) return false;
+    if (tb.node.type !== N.paragraph && tb.node.type !== N.heading) return false;
+    if (style === "paragraph" && tb.node.type === N.heading) return setBlock(getEnv, 0)(state, dispatch, view);
+    if (style === "paragraph" && !titleLike(tb.node)) return false;
+    if (style === "title" && (!isLatex(env) || !M.size)) return false;
+    const big = style === "title" ? env.helpers.sizeMark("LARGE", env.session.context) : null;
+    const bold = style === "title" ? env.helpers.newMark("bold", env.session.context) : null;
+    if (style === "title" && (!big || !bold)) return false;
+    if (!dispatch) return true;
+    const tr = state.tr;
+    const { from, to } = state.selection;
+    if (tb.node.type === N.heading) headingToParagraph(env, tr, tb.pos);
+    const para = tr.doc.nodeAt(tb.pos)!;
+    const start = tb.pos + 1;
+    const end = start + para.content.size;
+    tr.removeMark(start, end, M.size);
+    tr.removeMark(start, end, M.bold);
+    if (big && bold && end > start) {
+      tr.addMark(start, end, M.size.create(big));
+      tr.addMark(start, end, M.bold.create(bold));
+    }
+    // Title is centred; going back to Paragraph takes away a box that held only the title.
+    const $p = tr.doc.resolve(tb.pos);
+    const parent = $p.parent;
+    const boxPos = $p.depth > 0 ? $p.before() : -1;
+    if (style === "title") {
+      if (alignOf(parent) === null) {
+        const wrapped = wrapAligned([para.type === N.paragraph ? tr.doc.nodeAt(tb.pos)! : para], "center", env.session.context);
+        if (wrapped) {
+          tr.replaceWith(tb.pos, tb.pos + tr.doc.nodeAt(tb.pos)!.nodeSize, wrapped);
+          keepSelection(tr, from, to, 1);
+        }
+      } else if (alignOf(parent) !== "center") {
+        const next = setAlign(parent, "center", env.session.context);
+        if (next) tr.setNodeMarkup(boxPos, null, next.attrs);
+      }
+    } else if (alignOf(parent) === "center" && parent.childCount === 1) {
+      const inner = unwrapAligned(parent);
+      if (inner) {
+        tr.replaceWith(boxPos, boxPos + parent.nodeSize, inner);
+        keepSelection(tr, from, to, -1);
+      }
+    }
+    const sel = tr.selection;
+    detachIfRefused(env, tr, sel.$from.start(), sel.$from.end());
+    if (big && end === start) tr.setStoredMarks([M.size.create(big), M.bold.create(bold!)]);
+    dispatch(tr.setMeta(NEW_UNDO_STEP, true));
+    return true;
+  };
+}
+
+/** Inserts a page break (\newpage) as its own block. */
+export function insertPageBreak(env: VisualEnv): boolean {
+  const attrs = N.spacer_block ? env.helpers.spacerAttrs("pagebreak", env.session.context) : null;
+  if (!attrs) return false;
+  insertBlockNodes(env, Fragment.from(N.spacer_block.create(attrs)));
+  return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -404,8 +749,12 @@ function blockSlot(state: EditorState): { from: number; to: number } {
 
 /** Inserts blocks parsed from source. `pkgs` are added to the preamble in the same transaction. */
 export function insertBlocks(env: VisualEnv, src: string, pkgs: string[] = []) {
+  insertBlockNodes(env, env.session.parseSnippet(fileEol(env, src)), pkgs);
+}
+
+/** Inserts block nodes where a new block goes (never after the postamble), then puts the cursor after them. */
+export function insertBlockNodes(env: VisualEnv, frag: Fragment, pkgs: string[] = []) {
   const view = env.view;
-  const frag = env.session.parseSnippet(fileEol(env, src));
   if (frag.size === 0) return;
   const tr = view.state.tr;
   const slot = blockSlot(view.state);

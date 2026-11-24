@@ -14,6 +14,7 @@ import {
   insertInlineSrc,
   insertMathDisplay,
   insertMathInline,
+  insertPageBreak,
   isLatex,
   linkAt,
   makeHeading,
@@ -25,6 +26,7 @@ import {
 import { NEW_UNDO_STEP } from "./binding";
 import { citationItems, labelItems, openLink } from "./nodeviews/ChipViews";
 import { figurePath } from "./nodeviews/FigureView";
+import { openPageSetupFor } from "./nodeviews/PreambleView";
 import { IMAGE_FILE } from "./images";
 import { openPopover, type Anchor, type PickItem } from "./Popovers";
 
@@ -286,7 +288,7 @@ export function rawSource(env: VisualEnv) {
       kind: "raw",
       anchor: cursorAnchor(env),
       src: "",
-      title: isLatex(env) ? "Raw LaTeX" : "Raw Markdown",
+      title: isLatex(env) ? "LaTeX code block" : "Markdown code block",
       onCommit: (src) => {
         if (src.trim()) insertBlocks(env, src.trim());
       },
@@ -296,7 +298,13 @@ export function rawSource(env: VisualEnv) {
 }
 
 export function pageBreak(env: VisualEnv) {
-  insertBlocks(env, "\\newpage");
+  if (!insertPageBreak(env)) insertBlocks(env, "\\newpage");
+}
+
+/** Page setup for this file's preamble. False when the file has none (a chapter, a Markdown file). */
+export function pageSetup(env: VisualEnv): boolean {
+  if (!isLatex(env) || env.view.state.doc.firstChild?.type !== schema.nodes.preamble) return false;
+  return openPageSetupFor(env.view.nodeDOM(0));
 }
 
 /** The slash menu's entries for this dialect. */
@@ -317,7 +325,7 @@ export function slashItems(env: VisualEnv): PickItem[] {
     { key: "ref", label: "Reference", detail: "[[", latex: true },
     { key: "label", label: "Label", latex: true },
     { key: "pagebreak", label: "Page break", latex: true },
-    { key: "raw", label: latex ? "Raw LaTeX" : "Raw Markdown" },
+    { key: "raw", label: latex ? "LaTeX code block" : "Markdown code block" },
   ];
   return items.filter((i) => latex || !i.latex);
 }
