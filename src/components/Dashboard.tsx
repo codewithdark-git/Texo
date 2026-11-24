@@ -373,7 +373,7 @@ function ProjectTable({
 }) {
   const open = useApp((s) => s.open);
   return (
-    <table className="w-full border-collapse text-sm">
+    <table className="w-full table-fixed border-collapse text-sm">
       <thead className="text-left text-xs text-muted">
         <tr className="border-b border-border">
           <SortHeader label="Name" sortKey="name" className="pl-2" />
@@ -391,13 +391,13 @@ function ProjectTable({
             className="group border-b border-border/60 hover:bg-surface"
           >
             <td className="py-2 pl-2">
-              <button type="button" onClick={() => open(p)} className="flex items-center gap-3 text-left">
+              <button type="button" onClick={() => open(p)} className="flex w-full min-w-0 items-center gap-3 text-left">
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-surface-2 text-accent">
                   <FileText size={16} />
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate font-medium" title={p.name}>{p.name}</span>
-                  <span className="block truncate text-xs text-muted">
+                  <span className="block truncate text-xs text-muted" title={p.external ? p.path : undefined}>
                     {p.external ? p.path : `${p.fileCount} ${p.fileCount === 1 ? "file" : "files"}`}
                   </span>
                 </span>

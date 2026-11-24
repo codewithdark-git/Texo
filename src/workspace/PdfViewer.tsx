@@ -91,6 +91,8 @@ export function PdfViewer() {
   const eventBus = useRef<EventBus | null>(null);
   const doc = useRef<pdfjs.PDFDocumentProxy | null>(null);
   const loadId = useRef(0);
+  /** The project whose PDF is on screen. */
+  const shownProject = useRef<string | null>(null);
   const findInput = useRef<HTMLInputElement>(null);
 
   const result = useCompile((s) => s.result);
@@ -148,7 +150,20 @@ export function PdfViewer() {
     const viewer = pdfViewer.current;
     const container = containerRef.current;
     const pdfPath = result?.pdfPath;
-    if (!viewer || !container || !project || !pdfPath) return;
+    if (!viewer || !container) return;
+    // Another project's PDF must not stay up while this one compiles. (Within
+    // a project, a failed compile keeps the last good PDF on screen.)
+    if (doc.current && shownProject.current !== project) {
+      loadId.current++;
+      viewer.setDocument(null as unknown as pdfjs.PDFDocumentProxy);
+      (viewer as unknown as { linkService: PDFLinkService }).linkService.setDocument(null);
+      void doc.current.loadingTask.destroy();
+      doc.current = null;
+      setPages(0);
+      setLoading(false);
+    }
+    shownProject.current = project ?? null;
+    if (!project || !pdfPath) return;
     const id = ++loadId.current;
     const keep = doc.current
       ? { scale: viewer.currentScaleValue, top: container.scrollTop, left: container.scrollLeft }
