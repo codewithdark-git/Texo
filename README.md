@@ -37,6 +37,8 @@
 - A toolbar and shortcuts for text style, headings, lists, links, maths, figures, tables and citations. Markdown-style typing works too: `# ` makes a heading, `- ` a list, `**bold**` bold.
 - It edits the same source as Code mode, with one undo history. Anything it doesn't render stays as editable source, and nothing you didn't touch is rewritten.
 - Markdown files open in Visual mode and LaTeX files in Code mode by default; change this in Settings.
+<!-- verify -->
+- **A word processor for LaTeX:** Visual mode shows your document as pages with no code in sight. A ribbon sets font size, colour, alignment and page breaks, and **Page setup** sets paper, margins, orientation, font, line spacing and columns. Included files show inline, and the PDF updates as you type.
 
 ### Editor
 - The Monaco editor (the one inside VS Code) with LaTeX and BibTeX highlighting, folding, sticky section headers, and warnings for look-alike Unicode characters.
@@ -49,13 +51,14 @@
 - **Quick Open** (Ctrl+P) jumps to any file by typing part of its name.
 - **Search in project** (Ctrl+Shift+F) across every file, with jumps to each match.
 - Hover over maths in Code mode to see it rendered.
+- Squiggles sit under the exact problem, and the light bulb offers **Quick Fixes** for common errors.
 - Reopening a project brings back its open tabs, the active file, and where your cursor was.
 - The status bar shows the word count of the open file and when the PDF was last compiled. Click the count for a detailed **word count** of the whole document, file by file: running text, headings, captions, figures, tables and citations.
 - **Settings** (Ctrl+,): theme, font size, word wrap, the default mode for each file type, formula previews, the compiler and automatic compiling, and the projects folder.
 - Edits made in other apps appear right away. If a file changes on disk while you have unsaved edits, Texo asks which version to keep.
 
 ### Compiling
-- **Engines:** the built-in Tectonic engine (XeTeX-based), or your installed MiKTeX or TeX Live with pdfLaTeX, XeLaTeX or LuaLaTeX, run through latexmk or directly. BibTeX and Biber run automatically.
+- **Engines:** the built-in Tectonic engine (XeTeX-based), or your installed MiKTeX or TeX Live with pdfLaTeX, XeLaTeX or LuaLaTeX, run through latexmk or directly. BibTeX and Biber run automatically whenever a project has `.bib` files, and arXiv sources that ship a `.bbl` compile as they are.
 - **First launch:** Texo prepares the built-in engine in the background (a one-time download of about 90 MB of common LaTeX packages) and shows the progress in the sidebar.
 - **When it runs:** automatically after each save, or with Compile / Ctrl+Enter. A running compile can be stopped.
 - **Issues panel:** errors, warnings and layout problems, read from the TeX, BibTeX and Biber logs. Each shows TeX's context and links to its line, and they also appear as squiggles in the editor. Common problems come with plain-language hints.
@@ -135,6 +138,10 @@ The folder still works in any other LaTeX editor.
 - **No shell escape:** shell escape is off for every project, and untrusted projects run the built-in engine in its untrusted mode.
 - **Absolute tool paths:** tools run by absolute path, so a project can't substitute its own `pdflatex.exe`.
 - **No writing through links:** Texo won't write through links planted in `.texo/`.
+
+## Support Texo
+
+Texo is free and has no ads. If it helps you, use the **Support** button (in the top bar, the dashboard sidebar, the app menu or About) to fund its development.
 
 ## Roadmap
 
