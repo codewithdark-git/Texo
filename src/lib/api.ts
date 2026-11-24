@@ -53,6 +53,8 @@ export interface Symbols {
   labels: Label[];
   citations: Citation[];
   commands: string[];
+  /** Argument-free macros defined as short text (`\newcommand{\runs}{5}`). */
+  textMacros?: { name: string; body: string }[];
 }
 
 export type FileContent =

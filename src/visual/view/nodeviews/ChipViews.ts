@@ -1,5 +1,6 @@
 // Inline chips: citations, references, labels, footnotes, URLs, glyphs, soft
-// line breaks and Markdown images, plus command cards (\input, \maketitle…).
+// line breaks and Markdown images. Chips show readable text (an author and
+// year, a reference arrow), never a backslash command.
 
 import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView } from "prosemirror-view";
@@ -7,13 +8,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { atoms } from "../../core";
 import { completionSource } from "../../../editor/completions";
 import { revealSource } from "../../../workspace/EditorPane";
-import { useWorkspace } from "../../../workspace/store";
-import { parentDir } from "../../../workspace/paths";
 import { fileEol, safeUrl, setAttrs, type GetEnv } from "../commands";
 import { anchorOf, openPopover, type PickItem } from "../Popovers";
 import { loadImage, resolveImage } from "../images";
-import { AtomView, button, el, type ViewFactory } from "./common";
-import { colorize, editSource } from "./RawView";
+import { AtomView, el, type ViewFactory } from "./common";
+import { editSource } from "./RawView";
+
+// Command blocks live in CommandView.ts; re-exported for the existing imports.
+export { commandView } from "./CommandView";
 
 /** "Author Year" for a citation key from the project's .bib files. */
 function citeText(key: string): string | null {
@@ -104,7 +106,7 @@ class RefView extends AtomView {
     const known = new Set(completionSource.symbols.labels.map((l) => l.name));
     this.dom.classList.toggle("v-unknown", keys.some((k) => !known.has(k)));
     this.dom.textContent = "→ " + keys.join(", ");
-    this.dom.title = `\\${this.node.attrs.cmd}{${keys.join(",")}}`;
+    this.dom.title = `Reference to ${keys.join(", ")}. Click to change.`;
   }
 
   edit() {
@@ -192,7 +194,7 @@ class FootnoteView extends AtomView {
           value: body,
           multiline: true,
           onCommit: (text) => commit(isPlain(text) ? env.helpers.escapeText(text) : text),
-          extra: { label: "Edit as code", run: () => editSource(env, this.view, this.node, this.getPos, this.dom, this.node.attrs.src as string, "Footnote") },
+          extra: { label: "Edit LaTeX", run: () => editSource(env, this.view, this.node, this.getPos, this.dom, this.node.attrs.src as string, "Footnote") },
         },
         () => this.view.focus(),
       );
@@ -254,7 +256,7 @@ class GlyphView extends AtomView {
   protected paint() {
     const display = this.node.attrs.display as string;
     this.dom.textContent = display;
-    this.dom.title = this.node.attrs.src as string;
+    this.dom.removeAttribute("title");
     this.dom.classList.toggle("v-glyph-empty", display === "");
   }
 }
@@ -296,68 +298,6 @@ class ImageView extends AtomView {
   }
 }
 
-const COMMAND_TITLES: Record<string, string> = {
-  input: "Included file",
-  include: "Included file",
-  maketitle: "Title",
-  tableofcontents: "Table of contents",
-  bibliography: "Bibliography",
-  printbibliography: "Bibliography",
-  newpage: "Page break",
-  clearpage: "Page break",
-  appendix: "Appendix",
-};
-
-class CommandView extends AtomView {
-  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined, getEnv: GetEnv) {
-    super(el("div", "v-command"), node, view, getPos, getEnv);
-    this.dom.addEventListener("click", (e) => {
-      if ((e.target as HTMLElement).closest("button")) return;
-      e.preventDefault();
-      const env = this.getEnv();
-      if (env) editSource(env, this.view, this.node, this.getPos, this.dom, this.node.attrs.src as string, "Source");
-    });
-    this.paint();
-  }
-
-  protected paint() {
-    const env = this.getEnv();
-    const kind = this.node.attrs.kind as string;
-    const src = this.node.attrs.src as string;
-    const name = /^\\([A-Za-z]+)/.exec(src)?.[1] ?? kind;
-    this.dom.replaceChildren();
-    this.dom.append(el("span", "v-command-title", COMMAND_TITLES[name] ?? COMMAND_TITLES[kind] ?? "Command"));
-    const code = el("code", "v-command-src");
-    colorize(code, src, env?.dialect ?? "latex");
-    this.dom.append(code);
-    const target = this.node.attrs.target as string;
-    if ((kind === "input" || kind === "include") && target) {
-      this.dom.append(
-        button("Open", () => {
-          const file = includedFile(target, env?.path ?? "");
-          if (file) void useWorkspace.getState().openFile(file);
-          else env?.toast(`Couldn't find ${target} in this project.`, "error");
-        }),
-      );
-    }
-  }
-}
-
-/** The project file an \input or \include names (relative to the main document's folder, as LaTeX does). */
-function includedFile(target: string, fromFile: string): string | null {
-  const ws = useWorkspace.getState();
-  const files = new Set(ws.files.filter((f) => !f.isDir).map((f) => f.path));
-  const main = ws.project?.mainDocument;
-  const name = target.replace(/^\.\//, "");
-  for (const dir of [main ? parentDir(main) : "", parentDir(fromFile)]) {
-    for (const ext of ["", ".tex"]) {
-      const p = (dir ? dir + "/" : "") + name + ext;
-      if (files.has(p)) return p;
-    }
-  }
-  return null;
-}
-
 export const citeView: ViewFactory = (g) => (n, v, p) => new CiteView(n, v, p, g);
 export const refView: ViewFactory = (g) => (n, v, p) => new RefView(n, v, p, g);
 export const labelView: ViewFactory = (g) => (n, v, p) => new LabelView(n, v, p, g);
@@ -366,4 +306,3 @@ export const urlView: ViewFactory = (g) => (n, v, p) => new UrlView(n, v, p, g);
 export const glyphView: ViewFactory = (g) => (n, v, p) => new GlyphView(n, v, p, g);
 export const softbreakView: ViewFactory = (g) => (n, v, p) => new SoftbreakView(n, v, p, g);
 export const imageView: ViewFactory = (g) => (n, v, p) => new ImageView(n, v, p, g);
-export const commandView: ViewFactory = (g) => (n, v, p) => new CommandView(n, v, p, g);

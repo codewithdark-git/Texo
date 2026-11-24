@@ -3,9 +3,9 @@
 // the core and written into the file's Monaco model, which stays the only
 // copy of the document (see view/binding.ts).
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { EditorState, TextSelection, type Plugin } from "prosemirror-state";
-import { EditorView, type NodeViewConstructor } from "prosemirror-view";
+import { EditorView } from "prosemirror-view";
 import { gapCursor } from "prosemirror-gapcursor";
 import "prosemirror-view/style/prosemirror.css";
 import "prosemirror-gapcursor/style/gapcursor.css";
@@ -25,50 +25,51 @@ import { Toolbar } from "./view/Toolbar";
 import { PopoverHost, closePopover } from "./view/Popovers";
 import { GridDialog } from "./view/GridDialog";
 import { openLink } from "./view/nodeviews/ChipViews";
-import { mathView } from "./view/nodeviews/MathView";
-import { rawView } from "./view/nodeviews/RawView";
-import { commentView } from "./view/nodeviews/CommentView";
-import { expandPreamble, postambleView, preambleView } from "./view/nodeviews/PreambleView";
-import { figureView } from "./view/nodeviews/FigureView";
-import { tableView } from "./view/nodeviews/TableView";
-import { citeView, commandView, footnoteView, glyphView, imageView, labelView, refView, softbreakView, urlView } from "./view/nodeviews/ChipViews";
-import { containerView, headingView, listItemView, listView } from "./view/nodeviews/BlockViews";
+import { buildMarkViews, buildNodeViews } from "./view/nodeviews";
+import { expandPreamble } from "./view/nodeviews/PreambleView";
+import { PageSetupDialog } from "./view/PageSetupDialog";
+import { DEFAULT_SETUP, pageStyle, readPageSetup } from "./view/pageSetup";
 import type { GetEnv } from "./view/commands";
 import { getModel, useWorkspace } from "../workspace/store";
 import { setActiveEditor, switchMode, takeVisualStart, type ActiveEditor } from "../workspace/editorBridge";
 import { zoomBy } from "../workspace/EditorPane";
 import { useCompile } from "../workspace/compileStore";
-import { getEditorPrefs, onEditorPrefs } from "../lib/editorPrefs";
+import { DEFAULT_EDITOR_PREFS, getEditorPrefs, onEditorPrefs } from "../lib/editorPrefs";
+import { api } from "../lib/api";
 import { toast } from "../ui";
 import "./view/visual.css";
 
 const TIP_KEY = "texo.visualTip";
 
-function nodeViews(getEnv: GetEnv): Record<string, NodeViewConstructor> {
-  return {
-    math_inline: mathView(getEnv),
-    math_display: mathView(getEnv),
-    raw_block: rawView(getEnv),
-    raw_inline: rawView(getEnv),
-    comment_block: commentView(getEnv),
-    command_block: commandView(getEnv),
-    preamble: preambleView(getEnv),
-    postamble: postambleView(getEnv),
-    figure: figureView(getEnv),
-    table_block: tableView(getEnv),
-    cite: citeView(getEnv),
-    ref: refView(getEnv),
-    label: labelView(getEnv),
-    footnote: footnoteView(getEnv),
-    url: urlView(getEnv),
-    glyph: glyphView(getEnv),
-    softbreak: softbreakView(getEnv),
-    image: imageView(getEnv),
-    heading: headingView(getEnv),
-    list: listView(getEnv),
-    list_item: listItemView(getEnv),
-    container: containerView(getEnv),
-  };
+/** The preamble a file's page follows: its own, else the main document's (for \input files). */
+function usePagePreamble(path: string, doc: EditorState["doc"] | undefined): string | null {
+  const first = doc?.firstChild;
+  const own = first?.type === schema.nodes.preamble ? (first.attrs.src as string) : null;
+  const [main, setMain] = useState<string | null>(null);
+  useEffect(() => {
+    setMain(null);
+    if (!/\.(tex|ltx)$/i.test(path)) return;
+    const ws = useWorkspace.getState();
+    const mainDoc = ws.project?.mainDocument;
+    if (!mainDoc || mainDoc === path || !ws.project) return;
+    let cancelled = false;
+    const text = getModel(mainDoc)?.getValue();
+    const take = (t: string | undefined) => {
+      if (cancelled || !t) return;
+      const at = t.indexOf("\\begin{document}");
+      setMain(at === -1 ? null : t.slice(0, at));
+    };
+    if (text !== undefined) take(text);
+    else
+      void api
+        .readFile(ws.project.path, mainDoc)
+        .then((c) => take(c.kind === "text" ? c.content : undefined))
+        .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+  return own ?? main;
 }
 
 function readTipSeen(): boolean {
@@ -94,6 +95,12 @@ export default function VisualPane({ path }: { path: string }) {
   const [showComments, setShowComments] = useState(() => getEditorPrefs().visualShowComments);
   const [tipSeen, setTipSeen] = useState(readTipSeen);
   const [rawRatio, setRawRatio] = useState(0);
+  const [zoom, setZoom] = useState(() => getEditorPrefs().fontSize / DEFAULT_EDITOR_PREFS.fontSize);
+
+  // The page follows the document's paper, margins, font and spacing.
+  const preamble = usePagePreamble(path, pmState?.doc);
+  const setup = useMemo(() => (preamble === null ? DEFAULT_SETUP : readPageSetup(preamble).settings), [preamble]);
+  const page = useMemo(() => pageStyle(setup, width, zoom) as CSSProperties, [setup, width, zoom]);
 
   const getEnv: GetEnv = () => envRef.current;
 
@@ -107,7 +114,8 @@ export default function VisualPane({ path }: { path: string }) {
         if (e) e.binding.dispatch(normalizeTransaction(e, tr));
         else if (!tr.docChanged) view.updateState(view.state.apply(tr));
       },
-      nodeViews: nodeViews(getEnv),
+      nodeViews: buildNodeViews(getEnv),
+      markViews: buildMarkViews(),
       clipboardTextSerializer: (slice) => envRef.current?.session.serializeSlice(slice) ?? "",
       clipboardTextParser: clipboardTextParser(getEnv),
       transformPasted: transformPasted(getEnv),
@@ -259,7 +267,14 @@ export default function VisualPane({ path }: { path: string }) {
     [],
   );
 
-  useEffect(() => onEditorPrefs((p) => setShowComments(p.visualShowComments)), []);
+  useEffect(
+    () =>
+      onEditorPrefs((p) => {
+        setShowComments(p.visualShowComments);
+        setZoom(p.fontSize / DEFAULT_EDITOR_PREFS.fontSize);
+      }),
+    [],
+  );
 
   useLayoutEffect(() => {
     const el = root.current;
@@ -287,41 +302,47 @@ export default function VisualPane({ path }: { path: string }) {
       {env && rawRatio > 0.4 && (
         <div className="flex items-center gap-2 border-b border-border bg-amber-500/10 px-4 py-1.5 text-xs">
           <AlertTriangle size={13} className="shrink-0 text-amber-500" />
-          <span>Parts of this file use LaTeX that Visual mode shows as code. Those parts are kept exactly as written.</span>
+          <span>Parts of this file use LaTeX that Visual mode can't edit directly. They are shown as in the PDF and kept exactly as written; double-click one to edit it.</span>
         </div>
       )}
       {env && !tipSeen && (
         <div className="flex items-center gap-2 border-b border-border bg-accent/10 px-4 py-1.5 text-xs">
           <span className="flex-1">
-            Visual mode edits this file directly: what you change here is saved as ordinary {env.dialect === "latex" ? "LaTeX" : "Markdown"}. Switch back to Code any time
-            with Ctrl+Shift+E. Type $ for maths, / for more.
+            Type on the page as in a word processor: what you change here is saved as ordinary {env.dialect === "latex" ? "LaTeX" : "Markdown"}.
+            {env.dialect === "latex" ? " Page setup is at the page's top right." : ""} Type $ for maths, / for more; Ctrl+Shift+E switches to Code.
           </span>
           <button type="button" aria-label="Dismiss" onClick={dismissTip} className="rounded p-0.5 text-muted hover:text-text">
             <X size={13} />
           </button>
         </div>
       )}
-      <div ref={scroller} className="visual-scroll min-h-0 flex-1 overflow-auto">
-        <div className="visual-column mx-auto w-full max-w-[820px] px-8 pt-6 pb-32">
-          <div ref={mount} className={env ? "" : "hidden"} />
-          {!env && !failed && (
-            <div className="flex justify-center py-16 text-muted">
-              <Loader2 className="animate-spin" />
-            </div>
-          )}
-          {failed && (
-            <div className="flex flex-col items-center gap-3 py-16 text-center text-sm text-muted">
-              <p>Visual mode couldn't open this file.</p>
-              <button
-                type="button"
-                onClick={() => switchMode(path, "code")}
-                className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-text"
-              >
-                <Code2 size={14} /> Open in Code
-              </button>
-            </div>
-          )}
-        </div>
+      <div ref={scroller} className="visual-scroll v-canvas min-h-0 flex-1 overflow-auto">
+        {failed ? (
+          <div className="flex flex-col items-center gap-3 py-16 text-center text-sm text-muted">
+            <p>Visual mode couldn't open this file.</p>
+            <button
+              type="button"
+              onClick={() => switchMode(path, "code")}
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-text"
+            >
+              <Code2 size={14} /> Open in Code
+            </button>
+          </div>
+        ) : (
+          <div
+            className={`v-page ${setup.columns === 2 ? "v-cols-2" : ""} ${setup.parStyle === "space" ? "v-par-space" : "v-par-indent"} ${env?.dialect === "markdown" ? "v-markdown" : ""}`}
+            style={page}
+            role="document"
+            aria-label="Page"
+          >
+            <div ref={mount} className={env ? "" : "hidden"} />
+            {!env && (
+              <div className="flex justify-center py-16 text-neutral-500">
+                <Loader2 className="animate-spin" />
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {env && find.open && (
         <FindBar
@@ -335,6 +356,7 @@ export default function VisualPane({ path }: { path: string }) {
       )}
       <PopoverHost />
       <GridDialog />
+      <PageSetupDialog />
     </div>
   );
 }

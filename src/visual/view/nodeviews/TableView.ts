@@ -1,5 +1,6 @@
 // Tables as a read-only grid. Simple tabulars open the grid editor; anything
-// fancier (multicolumn, nested tabulars, Markdown tables) is edited as code.
+// fancier (multicolumn, nested tabulars) is shown as it appears in the PDF
+// and edited as LaTeX.
 
 import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView } from "prosemirror-view";
@@ -7,9 +8,29 @@ import { tabular } from "../../core";
 import { replaceWithSource, type GetEnv } from "../commands";
 import { useGridDialog } from "../GridDialog";
 import { AtomView, button, el, onActivate, type ViewFactory } from "./common";
-import { colorize, editSource } from "./RawView";
+import { editSource } from "./RawView";
+import { SnapshotSlot } from "./SnapshotSlot";
+import { plainRows } from "./tableCells";
+
+/** The cells of a Markdown pipe table (the |---| rule left out). */
+export function markdownRows(src: string): string[][] | null {
+  const lines = src.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length || !lines.every((l) => l.includes("|"))) return null;
+  return lines
+    .filter((l) => !/^\s*\|?\s*:?-{2,}/.test(l))
+    .map((l) =>
+      l
+        .trim()
+        .replace(/^\|/, "")
+        .replace(/\|$/, "")
+        .split(/(?<!\\)\|/)
+        .map((c) => c.trim().replace(/\\\|/g, "|")),
+    );
+}
 
 class TableView extends AtomView {
+  private slot: SnapshotSlot | null = null;
+
   constructor(node: PMNode, view: EditorView, getPos: () => number | undefined, getEnv: GetEnv) {
     super(el("div", "v-table"), node, view, getPos, getEnv);
     onActivate(this.dom, () => {
@@ -34,26 +55,36 @@ class TableView extends AtomView {
     bar.append(el("span", "v-spacer"));
     if (model?.simple) bar.append(button("Edit table", () => this.editGrid()));
     bar.append(
-      button("Edit as code", () => {
+      button("Edit LaTeX", () => {
         if (env) editSource(env, this.view, this.node, this.getPos, this.dom, src, "Table source");
       }),
     );
     this.dom.append(bar);
-    if (model) {
+    // LaTeX cells that still hold code (a macro, maths) show as in the PDF.
+    const rows = model ? plainRows(model.rows.map((r) => r.cells.map((c) => c.text))) : env?.dialect === "markdown" ? markdownRows(src) : null;
+    if (rows) {
+      // A wide table scrolls inside the page instead of widening it.
+      const wrap = el("div", "v-table-wrap");
       const table = el("table", "v-table-grid");
-      for (const row of model.rows) {
+      for (const row of rows) {
         const tr = el("tr");
-        for (const cell of row.cells) tr.append(el("td", undefined, cell.text));
+        for (const cell of row) tr.append(el("td", undefined, cell));
         table.append(tr);
       }
-      this.dom.append(table);
+      wrap.append(table);
+      this.dom.append(wrap);
     } else {
-      const code = el("pre", "v-raw-src");
-      colorize(code, src, env?.dialect ?? "latex");
-      this.dom.append(code);
+      this.slot ??= new SnapshotSlot(this.dom, () => this.node, this.getPos, this.getEnv, "Table — shown in the PDF", "The table, as it appears in the compiled PDF");
+      this.dom.append(this.slot.dom);
+      this.slot.refresh();
     }
     const caption = (model?.caption ?? (this.node.attrs.caption as string)) || "";
     if (caption) this.dom.append(el("div", "v-table-caption", caption));
+  }
+
+  destroy() {
+    super.destroy();
+    this.slot?.destroy();
   }
 
   private editGrid() {
