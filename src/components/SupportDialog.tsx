@@ -34,6 +34,24 @@ export function SupportButton() {
   );
 }
 
+/** The workspace top bar's button: a heart with "Support", icon-only when the window is narrow. */
+export function SupportTopButton() {
+  const openDialog = useUi((s) => s.openDialog);
+  return (
+    <button
+      type="button"
+      onClick={() => openDialog("support")}
+      aria-label="Support Texo"
+      title="Support Texo"
+      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 text-[13px] font-medium text-accent transition hover:border-accent/50 hover:bg-accent/20"
+    >
+      <Heart size={14} className="fill-current" />
+      {/* The label only shows when the bar has room; the title and aria-label cover the narrow case. */}
+      <span className="hidden lg:inline">Support</span>
+    </button>
+  );
+}
+
 export function SupportDialog({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Support Texo" onClose={onClose}>

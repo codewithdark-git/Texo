@@ -6,6 +6,7 @@ import { SHOW_PDF_EVENT, type ProjectSummary } from "../lib/api";
 import { useApp } from "../store";
 import { Button } from "../components/Dialog";
 import { AppMenu } from "../components/AppMenu";
+import { SupportTopButton } from "../components/SupportDialog";
 import { countMarkdownWords, countWords } from "../lib/wordcount";
 import { formatRelative } from "../lib/projects";
 import { useUi } from "../ui";
@@ -231,6 +232,7 @@ export function Workspace({ project }: { project: ProjectSummary }) {
             </button>
           ))}
         </div>
+        <SupportTopButton />
         <AppMenu />
       </header>
 
