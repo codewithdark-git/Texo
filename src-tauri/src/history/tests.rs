@@ -658,13 +658,15 @@ fn read_only_folder_turns_history_off() {
     put(dir, "main.tex", "x");
     fs::set_permissions(dir, fs::Permissions::from_mode(0o555)).unwrap();
     let st = super::status(dir);
+    // Checked while the folder is still read-only.
+    let snap = super::snapshot_quietly(dir, Reason::Idle);
     fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
     // Root ignores permissions (some CI containers).
     if st.active {
         return;
     }
     assert!(st.read_only, "{st:?}");
-    assert!(super::snapshot_quietly(dir, Reason::Idle).is_none() || st.active);
+    assert!(snap.is_none(), "{snap:?}");
 }
 
 #[test]
