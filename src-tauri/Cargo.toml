@@ -1,6 +1,6 @@
 [package]
 name = "texo"
-version = "1.1.0"
+version = "1.2.0"
 description = "Texo — a desktop LaTeX editor"
 edition = "2021"
 license = "MIT"
@@ -30,6 +30,16 @@ base64 = "0.22"
 flate2 = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
+# AI helper: HTTPS calls to the provider the user picked (rustls, honours
+# HTTP(S)_PROXY / NO_PROXY), and API keys kept in the OS credential store.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "system-proxy"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt", "net"] }
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
+# Change history: a private git repo per project in .texo/history. libgit2 is
+# built from source (no network, no OpenSSL), so users don't need git.
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+# Agents: the `search` tool and file globs (already in the tree via other crates).
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -100,3 +100,48 @@ export function switchMode(path: string, mode: EditorMode, at?: number) {
 export function toggleMode(path: string) {
   switchMode(path, showsVisual(path) ? "code" : "visual");
 }
+
+/** What the code editor has selected in `path`, as whole lines plus the exact text (null when nothing is selected). */
+export function editorSelection(path: string | null): { startLine: number; endLine: number; text: string } | null {
+  const ed = codeEditor;
+  const model = path ? getModel(path) : undefined;
+  if (!ed || !model || ed.getModel() !== model || showsVisual(path)) return null;
+  const sel = ed.getSelection();
+  if (!sel || sel.isEmpty()) return null;
+  const text = model.getValueInRange(sel);
+  if (!text.trim()) return null;
+  return { startLine: sel.startLineNumber, endLine: sel.endLineNumber, text };
+}
+
+/** Puts `text` at the cursor of the file in front (replacing a selection in the code editor) as one undo step.
+ * Returns the file it went into, or null when no text file is open. */
+export function insertAtCursor(text: string): string | null {
+  const path = useWorkspace.getState().active;
+  const model = path ? getModel(path) : undefined;
+  if (!path || !model) return null;
+  const visual = active && active.path === path ? active : null;
+  const ed = codeEditor?.getModel() === model ? codeEditor : null;
+  model.pushStackElement();
+  if (visual) {
+    // Visual mode follows the model, so the text goes in at its cursor's source offset.
+    const offset = visual.sourceOffset?.() ?? model.getValueLength();
+    const pos = model.getPositionAt(offset);
+    model.pushEditOperations([], [{ range: { startLineNumber: pos.lineNumber, startColumn: pos.column, endLineNumber: pos.lineNumber, endColumn: pos.column }, text }], () => null);
+    model.pushStackElement();
+    visual.focus();
+    return path;
+  }
+  if (ed) {
+    const sel = ed.getSelection();
+    const end = model.getFullModelRange().getEndPosition();
+    const range = sel ?? { startLineNumber: end.lineNumber, startColumn: end.column, endLineNumber: end.lineNumber, endColumn: end.column };
+    ed.executeEdits("texo-ai-insert", [{ range, text, forceMoveMarkers: true }]);
+    model.pushStackElement();
+    ed.focus();
+    return path;
+  }
+  const end = model.getFullModelRange().getEndPosition();
+  model.pushEditOperations([], [{ range: { startLineNumber: end.lineNumber, startColumn: end.column, endLineNumber: end.lineNumber, endColumn: end.column }, text }], () => null);
+  model.pushStackElement();
+  return path;
+}

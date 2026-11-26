@@ -2,10 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertCircle, AlertTriangle, ExternalLink, Info, Lightbulb, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import { SHOW_PDF_EVENT, type Issue, type Severity } from "../lib/api";
+import { ExplainIssueButton, FixAllButton } from "../ai/AiButtons";
+import { FixerAgentButton } from "../ai/agents/FixerButton";
 import { Button } from "../components/Dialog";
 import { bibtexBackendEdit, parseHint } from "../editor/biblatexFix";
 import { toast } from "../ui";
 import { useCompile } from "./compileStore";
+import { consequenceSummary, groupIssues } from "./diagnostics";
+import { InstallPackageFix } from "./InstallPackageFix";
 import { revealSource } from "./EditorPane";
 import { ENGINE_NAMES } from "./CompileControls";
 import { PdfViewer } from "./PdfViewer";
@@ -65,7 +69,7 @@ async function switchToBibtexBackend() {
 
 /** A compile hint; one that carries a fix marker gets a button that applies it. */
 function Hint({ hint }: { hint: string }) {
-  const { fix, text } = parseHint(hint);
+  const { fix, arg, text } = parseHint(hint);
   return (
     <div className="mx-3 mt-3 flex gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm">
       <Lightbulb size={15} className="mt-0.5 shrink-0 text-accent" />
@@ -76,6 +80,7 @@ function Hint({ hint }: { hint: string }) {
             Use BibTeX backend
           </Button>
         )}
+        {fix === "install-package" && arg && <InstallPackageFix pkg={arg} />}
       </div>
     </div>
   );
@@ -106,7 +111,9 @@ export function CompilePanel() {
   useEffect(() => {
     if (!c.result || c.result === lastResult.current) return;
     lastResult.current = c.result;
-    if (!c.result.pdfPath && c.result.status !== "aborted") setTab("issues");
+    // A PDF left from an earlier compile doesn't help when TeX stopped on an error.
+    const stopped = c.result.status === "failed" && c.result.issues.some((i) => i.fatal);
+    if ((!c.result.pdfPath || stopped) && c.result.status !== "aborted") setTab("issues");
     else if (c.result.status === "success") setTab((t) => (t === "issues" ? "pdf" : t));
   }, [c.result]);
 
@@ -170,9 +177,9 @@ export function CompilePanel() {
         <div className="min-h-0 flex-1 overflow-auto">
           {c.result?.rcIgnored && <TrustBanner onTrust={() => void c.trust()} />}
           {c.result?.hints.map((h) => <Hint key={h} hint={h} />)}
-          {issues.length > 0 && (
-            <div className="flex gap-1 px-3 pt-3 pb-1 text-xs">
-              {(
+          {(issues.length > 0 || status === "failed") && (
+            <div className="flex flex-wrap gap-1 px-3 pt-3 pb-1 text-xs">
+              {issues.length > 0 && (
                 [
                   ["all", `All ${issues.length}`],
                   ["error", `Errors ${counts.error}`],
@@ -192,39 +199,11 @@ export function CompilePanel() {
                   {label}
                 </button>
               ))}
+              {(counts.error > 0 || status === "failed") && !c.compiling && <FixAllButton />}
+              {(counts.error > 0 || status === "failed") && !c.compiling && <FixerAgentButton />}
             </div>
           )}
-          <ul className="p-2">
-            {shown.map((issue, i) => {
-              const { icon: Icon, className } = ICONS[issue.severity];
-              return (
-                <li key={i}>
-                  <button
-                    type="button"
-                    disabled={!issue.file}
-                    onClick={() => void goTo(issue)}
-                    className="flex w-full gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] enabled:hover:bg-surface-2"
-                  >
-                    <Icon size={15} className={`mt-0.5 shrink-0 ${className}`} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block break-words">{issue.message}</span>
-                      {issue.file && (
-                        <span className="block font-mono text-[11px] text-muted">
-                          {issue.file}
-                          {issue.line ? `:${issue.line}` : ""}
-                        </span>
-                      )}
-                      {issue.context && issue.severity === "error" && (
-                        <pre className="mt-1 overflow-x-auto rounded bg-bg px-2 py-1 font-mono text-[11px] text-muted">
-                          {issue.context}
-                        </pre>
-                      )}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <IssueList issues={shown} />
           {c.result && issues.length === 0 && !c.compiling && status !== "aborted" && (
             <Empty text="No errors or warnings." />
           )}
@@ -246,12 +225,76 @@ export function CompilePanel() {
   );
 }
 
+function IssueRow({ issue }: { issue: Issue }) {
+  const { icon: Icon, className } = ICONS[issue.severity];
+  return (
+    <li className="flex gap-1">
+      <button
+        type="button"
+        disabled={!issue.file}
+        onClick={() => void goTo(issue)}
+        className="flex min-w-0 flex-1 gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] enabled:hover:bg-surface-2"
+      >
+        <Icon size={15} className={`mt-0.5 shrink-0 ${className}`} />
+        <span className="min-w-0 flex-1">
+          {issue.fatal && (
+            <span className="mb-0.5 block text-[11px] font-medium tracking-wide text-danger uppercase">TeX stopped here</span>
+          )}
+          <span className="block break-words">{issue.message}</span>
+          {issue.file && (
+            <span className="block font-mono text-[11px] text-muted">
+              {issue.file}
+              {issue.line ? `:${issue.line}` : ""}
+            </span>
+          )}
+          {issue.explanation && <span className="mt-1 block text-[12px] leading-relaxed text-text/85">{issue.explanation}</span>}
+          {issue.context && issue.severity === "error" && (
+            <pre className="mt-1 overflow-x-auto rounded bg-bg px-2 py-1 font-mono text-[11px] text-muted">{issue.context}</pre>
+          )}
+        </span>
+      </button>
+      <ExplainIssueButton issue={issue} />
+    </li>
+  );
+}
+
+/**
+ * The issues, with the citations and references that are only undefined
+ * because TeX stopped early folded into a group of their own below.
+ */
+function IssueList({ issues }: { issues: Issue[] }) {
+  const { main, consequences } = groupIssues(issues);
+  return (
+    <>
+      <ul className="p-2">
+        {main.map((issue, i) => (
+          <IssueRow key={i} issue={issue} />
+        ))}
+      </ul>
+      {consequences.length > 0 && (
+        <details className="mx-3 mb-3 rounded-lg border border-border">
+          <summary className="cursor-pointer px-3 py-2 text-xs text-muted select-none hover:text-text">
+            {consequenceSummary(consequences)}. Fix the error above first.
+          </summary>
+          <ul className="px-2 pb-2 opacity-75">
+            {consequences.map((issue, i) => (
+              <IssueRow key={i} issue={issue} />
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
+  );
+}
+
 function statusLine(status: string, ms: number, errors: number): string {
   switch (status) {
     case "success":
       return `Compiled in ${formatDuration(ms)}`;
     case "failed":
-      return errors ? `${errors} ${errors === 1 ? "error" : "errors"} · ${formatDuration(ms)}` : `No PDF produced · ${formatDuration(ms)}`;
+      return errors
+        ? `Failed · ${errors} ${errors === 1 ? "error" : "errors"} · ${formatDuration(ms)}`
+        : `Failed · no PDF produced · ${formatDuration(ms)}`;
     case "aborted":
       return "Stopped";
     case "timeout":

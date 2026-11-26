@@ -83,6 +83,8 @@ interface WorkspaceStore {
   setCursor: (cursor: { line: number; column: number } | null) => void;
   setError: (error: string | null) => void;
   setMode: (path: string, mode: EditorMode) => void;
+  /** Re-reads files changed outside the editor (e.g. an applied agent changeset), as the file watcher does. */
+  reloadFromDisk: (paths: string[]) => Promise<void>;
 }
 
 // Monaco models and save bookkeeping live outside React state.
@@ -262,6 +264,9 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       model.pushEditOperations([], [{ range, text: text.slice(start, text.length - tail) }], () => null);
     }
     savedVersion.set(path, model.getAlternativeVersionId());
+    // The editor now shows the disk text, not our last write: a later change
+    // back to that write must still reload (DS-1).
+    lastWritten.delete(path);
     setStatus(path, { dirty: false, conflict: false });
   }
 
@@ -298,7 +303,12 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
     });
   }
 
-  async function onDiskChange(paths: string[]) {
+  /**
+   * `force`: the caller knows these files were just rewritten (a history
+   * restore, an applied changeset), so reload them even when the new text
+   * equals what the editor last saved (DS-1).
+   */
+  async function onDiskChange(paths: string[], force = false) {
     clearTimeout(filesTimer);
     filesTimer = setTimeout(() => void get().refreshFiles().catch(fail), 150);
     if (paths.some(isSymbolSource)) scheduleSymbols();
@@ -314,7 +324,8 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       } catch {
         continue; // Deleted; refreshFiles closes the tab if it's clean.
       }
-      if (disk === model.getValue() || disk === lastWritten.get(path)) continue;
+      if (force) lastWritten.delete(path);
+      if (disk === model.getValue() || (!force && disk === lastWritten.get(path))) continue;
       if (isDirty(path)) {
         clearTimeout(saveTimers.get(path));
         setStatus(path, { conflict: true });
@@ -584,6 +595,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
       set((s) => ({ modes: { ...s.modes, [path]: mode } }));
       scheduleSession();
     },
+    reloadFromDisk: (paths) => onDiskChange(paths, true),
   };
 });
 

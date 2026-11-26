@@ -309,7 +309,7 @@ enum RunEnd {
 
 /// Kills a process and everything it started (latexmk → perl → pdflatex).
 #[cfg(windows)]
-fn kill_tree(pid: u32) {
+pub(crate) fn kill_tree(pid: u32) {
     use std::os::windows::process::CommandExt;
     let _ = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -322,7 +322,7 @@ fn kill_tree(pid: u32) {
 /// Each tool runs in its own process group (see `run`), so killing the group
 /// stops everything it started.
 #[cfg(not(windows))]
-fn kill_tree(pid: u32) {
+pub(crate) fn kill_tree(pid: u32) {
     let _ = Command::new("kill")
         .args(["-KILL", &format!("-{pid}")])
         .stdout(Stdio::null())
@@ -563,10 +563,7 @@ fn bib_tool_missing(message: &str) -> Issue {
     Issue {
         severity: texlog::Severity::Error,
         message: message.to_string(),
-        file: None,
-        line: None,
-        context: None,
-        citation: None,
+        ..Default::default()
     }
 }
 
@@ -706,6 +703,17 @@ pub fn project_relative(root: &Path, main_dir: &Path, logged: &str) -> Option<St
     // Return the original casing from the normalised path.
     let original = normal.to_string_lossy().replace('\\', "/");
     Some(original[original.len() - rel.len()..].to_string())
+}
+
+/// Success only when there's a PDF, no errors, and TeX didn't give up (a
+/// PDF left from an earlier compile doesn't count then).
+fn final_status(has_pdf: bool, issues: &[Issue], stopped_early: bool) -> Status {
+    let has_errors = issues.iter().any(|i| i.severity == texlog::Severity::Error);
+    if has_pdf && !has_errors && !stopped_early {
+        Status::Success
+    } else {
+        Status::Failed
+    }
 }
 
 pub fn compile(job: &Job) -> CompileResult {
@@ -928,8 +936,14 @@ pub fn compile(job: &Job) -> CompileResult {
     }
     // Put bibliography failures first: they explain the undefined citations below.
     issues.splice(0..0, extra_issues);
-    result.hints = texlog::hints(&log, &issues);
-    result.hints.splice(0..0, bib_hints);
+    // When TeX stopped on an error, that error goes first with a plain
+    // explanation (and an install button for a missing package or font),
+    // and the citations left undefined because of it are flagged as such.
+    let manager = crate::texpkg::Manager::for_tools(job.tools, Some(job.compiler));
+    let diagnosis = texlog::diagnose(&log, &mut issues, manager);
+    result.hints = diagnosis.hints;
+    let at = diagnosis.primary;
+    result.hints.splice(at..at, bib_hints);
     result.issues = issues;
 
     // latexmk skips work when the PDF is already up to date, so an existing
@@ -939,8 +953,7 @@ pub fn compile(job: &Job) -> CompileResult {
         result.pdf_path = Some(pdf.to_string_lossy().into_owned());
     }
     if completed {
-        let has_errors = result.issues.iter().any(|i| i.severity == texlog::Severity::Error);
-        result.status = if result.pdf_path.is_some() && !has_errors { Status::Success } else { Status::Failed };
+        result.status = final_status(result.pdf_path.is_some(), &result.issues, diagnosis.stopped_early);
     }
     result.log = if log.len() > MAX_LOG_BYTES {
         let mut cut = log.len() - MAX_LOG_BYTES;
@@ -959,6 +972,17 @@ pub fn compile(job: &Job) -> CompileResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_that_stopped_early_never_counts_as_success() {
+        let warning = Issue { severity: texlog::Severity::Warning, message: "w".into(), ..Default::default() };
+        let error = Issue { severity: texlog::Severity::Error, message: "e".into(), ..Default::default() };
+        assert_eq!(final_status(true, std::slice::from_ref(&warning), false), Status::Success);
+        assert_eq!(final_status(true, &[warning.clone(), error], false), Status::Failed);
+        // A PDF left over from an earlier compile doesn't make a stopped run a success.
+        assert_eq!(final_status(true, &[warning], true), Status::Failed);
+        assert_eq!(final_status(false, &[], false), Status::Failed);
+    }
 
     #[test]
     fn untrusted_projects_skip_their_latexmkrc() {
