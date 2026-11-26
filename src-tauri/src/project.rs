@@ -2,6 +2,7 @@
 //! `.texo/` subfolder so the LaTeX sources stay untouched and portable.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -61,6 +62,22 @@ pub struct ProjectSummary {
     pub thumbnail: Option<String>,
     /// Project-relative path of the saved PDF, if Texo has written one.
     pub output_pdf: Option<String>,
+    /// The folder is listed but can't be found (moved, renamed, deleted, or
+    /// on a drive that isn't connected), or its `.texo` info is gone.
+    pub missing: bool,
+    /// The folder is there but Texo's project info in it can't be read
+    /// (deleted, damaged, or a cloud file that isn't on this PC). Opening it
+    /// goes through `open_folder`, which sets it up again or explains why not.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_setup: bool,
+    /// Things to tell the user after opening (main document re-detected,
+    /// files only in the cloud, a very long path…). Plain sentences.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<String>,
+    /// When Texo had to pick the main document and several files could be
+    /// it: every likely one, best first, so the user can switch in one click.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub main_candidates: Vec<String>,
 }
 
 const THUMBNAIL_FILE: &str = "thumbnail.png";
@@ -156,6 +173,19 @@ pub fn read_meta(dir: &Path) -> Option<ProjectMeta> {
     serde_json::from_str(&text).ok()
 }
 
+/// Moves a `project.json` that can't be parsed aside (keeping it for the
+/// user) so fresh metadata can be written. Returns the backup's name.
+fn set_aside_damaged_meta(dir: &Path) -> Option<String> {
+    let path = meta_path(dir);
+    let text = fs::read(&path).ok()?;
+    if serde_json::from_slice::<ProjectMeta>(&text).is_ok() {
+        return None;
+    }
+    let name = format!("project.damaged-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+    fs::rename(&path, path.with_file_name(&name)).ok()?;
+    Some(name)
+}
+
 fn write_meta(dir: &Path, meta: &ProjectMeta) -> AppResult<()> {
     write_meta_file(dir, META_FILE, serde_json::to_string_pretty(meta)?.as_bytes())
 }
@@ -177,6 +207,7 @@ pub fn ensure_meta(dir: &Path) -> AppResult<ProjectMeta> {
     if let Some(meta) = read_meta(dir) {
         return Ok(meta);
     }
+    set_aside_damaged_meta(dir);
     let name = dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -192,95 +223,244 @@ fn is_tex(path: &Path) -> bool {
 }
 
 /// How a `.tex` file looks as a candidate main document.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MainCandidate {
     /// Relative path with `/` separators.
     pub path: String,
     pub has_documentclass: bool,
     pub has_begin_document: bool,
+    /// Loads a bibliography (`\bibliography`, `\addbibresource`, …).
+    pub has_bibliography: bool,
+    /// Files it pulls in with `\input`, `\include`, `\subfile`…, as written
+    /// (without a `.tex` extension, `/` separators).
+    pub includes: Vec<String>,
 }
 
+const INCLUDE_COMMANDS: [&str; 4] = ["\\input{", "\\include{", "\\subfile{", "\\subfileinclude{"];
+const BIB_COMMANDS: [&str; 4] = ["\\bibliography{", "\\addbibresource", "\\printbibliography", "\\begin{thebibliography}"];
+
 impl MainCandidate {
-    /// Classifies a file from its text. Commented-out lines don't count.
+    /// Classifies a file from its text. Comments don't count.
     pub fn from_text(path: String, text: &str) -> Self {
-        let (mut class, mut begin) = (false, false);
-        for line in text.lines().map(str::trim_start).filter(|l| !l.starts_with('%')) {
-            class |= line.starts_with("\\documentclass");
-            begin |= line.contains("\\begin{document}");
+        let mut c = MainCandidate { path, ..Default::default() };
+        for line in text.lines().map(strip_comment) {
+            let line = line.trim_start();
+            if line.is_empty() {
+                continue;
+            }
+            c.has_documentclass |= line.starts_with("\\documentclass");
+            c.has_begin_document |= line.contains("\\begin{document}");
+            c.has_bibliography |= BIB_COMMANDS.iter().any(|b| line.contains(b));
+            for cmd in INCLUDE_COMMANDS {
+                for (at, _) in line.match_indices(cmd) {
+                    let rest = &line[at + cmd.len()..];
+                    if let Some(end) = rest.find('}') {
+                        let target = rest[..end].trim().replace('\\', "/");
+                        let target = target.strip_suffix(".tex").unwrap_or(&target).to_string();
+                        if !target.is_empty() {
+                            c.includes.push(target);
+                        }
+                    }
+                }
+            }
         }
-        MainCandidate { path, has_documentclass: class, has_begin_document: begin }
+        c
+    }
+
+    fn is_complete(&self) -> bool {
+        self.has_documentclass && self.has_begin_document
     }
 }
 
-/// Picks the main document: files with both `\documentclass` and
-/// `\begin{document}` first, then `main.tex`, then the shallowest path
-/// (ties broken alphabetically).
-pub fn rank_main_candidates(candidates: &[MainCandidate]) -> Option<String> {
-    candidates
+/// The text before an unescaped `%`.
+fn strip_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'%' && (i == 0 || bytes[i - 1] != b'\\') {
+            return &line[..i];
+        }
+    }
+    line
+}
+
+/// Folder or file names that usually hold samples rather than the paper.
+const EXAMPLE_WORDS: [&str; 10] =
+    ["example", "examples", "sample", "samples", "template", "templates", "demo", "test", "tests", "skeleton"];
+
+fn looks_like_example(path: &str) -> bool {
+    path.to_lowercase()
+        .split('/')
+        .flat_map(|part| part.trim_end_matches(".tex").split(|c: char| !c.is_alphanumeric()))
+        .any(|word| EXAMPLE_WORDS.contains(&word))
+}
+
+/// Letters and digits only, lowercased: "My_Paper" and "my-paper" match.
+fn loose(name: &str) -> String {
+    name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// `\input{x}` written in `from` names `x.tex` next to the main document;
+/// the project root and `from`'s own folder are both tried.
+fn included_paths(c: &MainCandidate) -> Vec<String> {
+    let dir = c.path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    c.includes
         .iter()
-        .min_by_key(|c| {
-            let name = c.path.rsplit('/').next().unwrap_or("");
-            (
-                !(c.has_documentclass && c.has_begin_document),
-                !c.has_documentclass,
-                !name.eq_ignore_ascii_case("main.tex"),
-                c.path.matches('/').count(),
-                c.path.to_lowercase(),
-            )
+        .flat_map(|t| {
+            let t = t.trim_start_matches("./").to_lowercase();
+            let mut out = vec![format!("{t}.tex"), t.clone()];
+            if !dir.is_empty() {
+                out.push(format!("{}/{t}.tex", dir.to_lowercase()));
+                out.push(format!("{}/{t}", dir.to_lowercase()));
+            }
+            out
         })
-        .map(|c| c.path.clone())
+        .collect()
+}
+
+/// Orders likely main documents, best first. Only files with
+/// `\documentclass` are returned. `folder` is the project folder's name; a
+/// file named like it is probably the paper.
+///
+/// What counts, roughly in this order: a complete document (class and
+/// `\begin{document}`); not being `\input` by another file; not looking like
+/// a sample (`example_*.tex`, `templates/`); being `main.tex` or named like
+/// the folder; loading a bibliography and pulling in other files; being
+/// near the top of the folder.
+pub fn rank_main_candidates_in(candidates: &[MainCandidate], folder: Option<&str>) -> Vec<String> {
+    let included: std::collections::HashSet<String> = candidates.iter().flat_map(included_paths).collect();
+    let folder = folder.map(loose).filter(|f| !f.is_empty());
+    let score = |c: &MainCandidate| -> i64 {
+        let file = c.path.rsplit('/').next().unwrap_or("");
+        let stem = file.strip_suffix(".tex").or_else(|| file.strip_suffix(".TEX")).unwrap_or(file);
+        let mut s = 0;
+        if c.is_complete() {
+            s += 1000;
+        }
+        if included.contains(&c.path.to_lowercase()) {
+            s -= 500;
+        }
+        if looks_like_example(&c.path) {
+            s -= 200;
+        }
+        if stem.eq_ignore_ascii_case("main") {
+            s += 60;
+        } else if folder.as_deref().is_some_and(|f| *f == loose(stem)) {
+            s += 50;
+        } else if ["paper", "thesis", "manuscript", "article", "report", "ms", "dissertation"]
+            .contains(&stem.to_lowercase().as_str())
+        {
+            s += 30;
+        }
+        if c.has_bibliography {
+            s += 25;
+        }
+        s += 3 * c.includes.len().min(10) as i64;
+        s -= 10 * c.path.matches('/').count() as i64;
+        s
+    };
+    let mut ranked: Vec<(&MainCandidate, i64)> =
+        candidates.iter().filter(|c| c.has_documentclass).map(|c| (c, score(c))).collect();
+    ranked.sort_by(|(a, sa), (b, sb)| sb.cmp(sa).then_with(|| a.path.to_lowercase().cmp(&b.path.to_lowercase())));
+    ranked.into_iter().map(|(c, _)| c.path.clone()).collect()
+}
+
+/// The best main document of [`rank_main_candidates_in`], or failing that
+/// any `main.tex`, or `None`.
+pub fn rank_main_candidates(candidates: &[MainCandidate]) -> Option<String> {
+    rank_main_candidates_in(candidates, None).into_iter().next().or_else(|| {
+        candidates
+            .iter()
+            .filter(|c| c.path.rsplit('/').next().is_some_and(|n| n.eq_ignore_ascii_case("main.tex")))
+            .min_by_key(|c| c.path.matches('/').count())
+            .map(|c| c.path.clone())
+    })
 }
 
 /// Largest `.tex` file read when ranking main documents.
 pub const MAX_RANKED_TEX_BYTES: u64 = 2 * 1024 * 1024;
+/// How deep a paper may sit in a folder (`repo/paper/conference/main.tex`
+/// is three folders down).
+const MAX_SCAN_DEPTH: usize = 10;
+/// Stop after this many entries, so opening a huge folder stays quick.
+const MAX_RANK_ENTRIES: usize = 30_000;
+/// At most this many `.tex` files are read.
+const MAX_RANKED_FILES: usize = 400;
+/// Folders that never hold the paper and can be huge.
+pub(crate) const SKIPPED_DIRS: [&str; 10] =
+    [META_DIR, ".git", ".hg", ".svn", "node_modules", "target", "__pycache__", ".venv", "venv", ".idea"];
 
-/// Like [`detect_main_document`], but for folders Texo didn't make, such as
-/// imported archives: ranks every `.tex` file up to four folders deep with
-/// [`rank_main_candidates`].
-pub fn detect_main_document_ranked(dir: &Path) -> Option<String> {
-    let candidates: Vec<MainCandidate> = WalkDir::new(dir)
-        .max_depth(5)
+/// What scanning a folder for main documents found.
+#[derive(Debug, Default)]
+pub struct MainScan {
+    pub candidates: Vec<MainCandidate>,
+    /// `.tex` files kept only in the cloud (OneDrive and similar), whose
+    /// text couldn't be read.
+    pub cloud_only: usize,
+}
+
+fn skipped_dir(e: &walkdir::DirEntry) -> bool {
+    e.depth() > 0 && e.file_type().is_dir() && SKIPPED_DIRS.iter().any(|d| e.file_name() == *d)
+}
+
+/// True for OneDrive-style placeholders whose contents aren't on this PC.
+#[cfg(windows)]
+pub(crate) fn is_cloud_placeholder(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const OFFLINE: u32 = 0x1000;
+    const RECALL_ON_OPEN: u32 = 0x4_0000;
+    const RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
+    meta.file_attributes() & (OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0
+}
+
+#[cfg(not(windows))]
+pub(crate) fn is_cloud_placeholder(_meta: &fs::Metadata) -> bool {
+    false
+}
+
+/// Reads every `.tex` file (up to the limits above) as a main candidate.
+pub fn scan_main_candidates(dir: &Path) -> MainScan {
+    let mut scan = MainScan::default();
+    for e in WalkDir::new(dir)
+        .max_depth(MAX_SCAN_DEPTH)
         .into_iter()
-        .filter_entry(|e| e.file_name() != META_DIR)
+        .filter_entry(|e| !skipped_dir(e))
         .filter_map(Result::ok)
+        .take(MAX_RANK_ENTRIES)
         .filter(|e| e.file_type().is_file() && is_tex(e.path()))
-        .filter_map(|e| {
-            let rel = to_slash(e.path().strip_prefix(dir).ok()?);
-            let small = e.metadata().is_ok_and(|m| m.len() <= MAX_RANKED_TEX_BYTES);
-            let bytes = if small { fs::read(e.path()).unwrap_or_default() } else { Vec::new() };
-            Some(MainCandidate::from_text(rel, &String::from_utf8_lossy(&bytes)))
-        })
-        .collect();
-    rank_main_candidates(&candidates)
-}
-
-fn has_documentclass(path: &Path) -> bool {
-    fs::read_to_string(path).is_ok_and(|text| {
-        text.lines()
-            .any(|l| l.trim_start().starts_with("\\documentclass"))
-    })
-}
-
-/// Picks the file to compile: `main.tex` at the top level, otherwise the first
-/// `.tex` file (top level first, then up to three folders deep) that contains
-/// `\documentclass`.
-pub fn detect_main_document(dir: &Path) -> Option<String> {
-    if dir.join("main.tex").is_file() {
-        return Some("main.tex".into());
+        .take(MAX_RANKED_FILES)
+    {
+        let Ok(rel) = e.path().strip_prefix(dir) else { continue };
+        let meta = e.metadata().ok();
+        let small = meta.as_ref().is_some_and(|m| m.len() <= MAX_RANKED_TEX_BYTES);
+        // Reading a placeholder downloads it, which is what compiling needs
+        // anyway; when that fails (offline), rank by name alone.
+        let bytes = if small { fs::read(e.path()).ok() } else { Some(Vec::new()) };
+        if bytes.is_none() && meta.as_ref().is_some_and(is_cloud_placeholder) {
+            scan.cloud_only += 1;
+        }
+        let text = String::from_utf8_lossy(bytes.as_deref().unwrap_or_default()).into_owned();
+        scan.candidates.push(MainCandidate::from_text(to_slash(rel), &text));
     }
-    let mut candidates: Vec<PathBuf> = WalkDir::new(dir)
-        .max_depth(4)
+    scan
+}
+
+fn folder_name(dir: &Path) -> Option<String> {
+    dir.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
+/// Like [`detect_main_document`], for folders Texo didn't make, such as
+/// imported archives.
+pub fn detect_main_document_ranked(dir: &Path) -> Option<String> {
+    let scan = scan_main_candidates(dir);
+    rank_main_candidates_in(&scan.candidates, folder_name(dir).as_deref())
         .into_iter()
-        .filter_entry(|e| e.file_name() != META_DIR)
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file() && is_tex(e.path()))
-        .map(|e| e.into_path())
-        .collect();
-    candidates.sort_by_key(|p| (p.components().count(), p.clone()));
-    candidates
-        .into_iter()
-        .find(|p| has_documentclass(p))
-        .and_then(|p| p.strip_prefix(dir).ok().map(to_slash))
+        .next()
+        .or_else(|| rank_main_candidates(&scan.candidates))
+}
+
+/// Picks the file to compile in a folder: see [`rank_main_candidates_in`].
+pub fn detect_main_document(dir: &Path) -> Option<String> {
+    detect_main_document_ranked(dir)
 }
 
 pub fn to_slash(path: &Path) -> String {
@@ -322,7 +502,50 @@ pub fn summarize(dir: &Path, external: bool) -> Option<ProjectSummary> {
         external,
         thumbnail: read_thumbnail(dir),
         output_pdf: meta.output_pdf.clone(),
+        missing: false,
+        needs_setup: false,
+        notices: Vec::new(),
+        main_candidates: Vec::new(),
     })
+}
+
+/// A dashboard row for a listed folder that can't be read, so the user can
+/// find it again or remove it instead of it silently disappearing.
+fn missing_summary(dir: &Path) -> ProjectSummary {
+    let epoch = DateTime::<Utc>::from(SystemTime::UNIX_EPOCH);
+    ProjectSummary {
+        id: format!("missing:{}", to_slash(dir)),
+        name: folder_name(dir).unwrap_or_else(|| to_slash(dir)),
+        path: dir.to_string_lossy().into_owned(),
+        main_document: None,
+        engine: Engine::default(),
+        created_at: epoch,
+        last_edited: epoch,
+        file_count: 0,
+        external: true,
+        thumbnail: None,
+        output_pdf: None,
+        missing: true,
+        needs_setup: false,
+        notices: Vec::new(),
+        main_candidates: Vec::new(),
+    }
+}
+
+/// A dashboard row for a listed folder that exists but whose project info
+/// can't be read: it opens normally (Texo sets it up again), instead of
+/// claiming the folder is gone.
+fn unreadable_summary(dir: &Path) -> ProjectSummary {
+    let changed = fs::metadata(dir).and_then(|m| m.modified()).map(DateTime::<Utc>::from);
+    let mut row = missing_summary(dir);
+    row.id = format!("unread:{}", to_slash(dir));
+    if let Ok(t) = changed {
+        row.created_at = t;
+        row.last_edited = t;
+    }
+    row.missing = false;
+    row.needs_setup = true;
+    row
 }
 
 /// Every project in `root`, plus the external folders that still exist.
@@ -334,8 +557,288 @@ pub fn list(root: &Path, external: &[PathBuf]) -> Vec<ProjectSummary> {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| summarize(&e.path(), false))
         .collect();
-    out.extend(external.iter().filter_map(|p| summarize(p, true)));
+    out.extend(external.iter().map(|p| {
+        summarize(p, true).unwrap_or_else(|| if p.is_dir() { unreadable_summary(p) } else { missing_summary(p) })
+    }));
     out
+}
+
+// ---------------------------------------------------------------------------
+// Opening a folder (or a .tex file) chosen by the user
+
+/// Marks an error the UI answers by offering an editable copy.
+pub const READ_ONLY_MARK: &str = "[read-only] ";
+
+/// Windows' "cloud file" errors (OneDrive and similar not running, file not
+/// downloaded, provider busy…).
+#[cfg(windows)]
+const CLOUD_ERRORS: std::ops::RangeInclusive<i32> = 358..=406;
+
+/// Turns a file-system error from opening a project into a plain sentence.
+/// `writing` is true when Texo was saving its own files in the folder.
+pub fn explain_io(e: std::io::Error, writing: bool) -> AppError {
+    let code = e.raw_os_error();
+    #[cfg(windows)]
+    {
+        if code.is_some_and(|c| CLOUD_ERRORS.contains(&c)) {
+            return AppError::msg(
+                "This folder is in OneDrive (or another cloud folder) and some of its files aren't on this PC right now. \
+                 Check that you're online and OneDrive is running, or in File Explorer right-click the folder and \
+                 choose “Always keep on this device”, then try again.",
+            );
+        }
+        if code == Some(206) {
+            return AppError::msg(
+                "This folder's location is too long for Windows. Move it closer to the top of a drive (for example C:\\Papers) and open it again.",
+            );
+        }
+    }
+    // EROFS on Linux and macOS; "write protected" on Windows.
+    let read_only_fs = if cfg!(windows) { code == Some(19) } else { code == Some(30) };
+    if writing && (read_only_fs || e.kind() == ErrorKind::PermissionDenied) {
+        return AppError::msg(format!(
+            "{READ_ONLY_MARK}Texo can't save its own files (the hidden .texo folder with the build and the PDF) in this \
+             folder, because it is read-only or you aren't allowed to change it. You can make an editable copy in your \
+             projects folder."
+        ));
+    }
+    if e.kind() == ErrorKind::PermissionDenied {
+        return AppError::msg("You don't have permission to open this folder.");
+    }
+    e.into()
+}
+
+fn explain(e: AppError, writing: bool) -> AppError {
+    match e {
+        AppError::Io(io) => explain_io(io, writing),
+        other => other,
+    }
+}
+
+/// The folder to open for a path the user picked or dropped, and the file
+/// inside it when they picked a `.tex` file rather than a folder.
+pub fn resolve_open_target(path: &Path, home: Option<&Path>) -> AppResult<(PathBuf, Option<String>)> {
+    let shell = [
+        (dirs::desktop_dir(), "Desktop"),
+        (dirs::download_dir(), "Downloads"),
+        (dirs::document_dir(), "Documents"),
+    ];
+    let shell: Vec<(PathBuf, &str)> = shell.into_iter().filter_map(|(d, n)| Some((d?, n))).collect();
+    resolve_open_target_with(path, home, &shell)
+}
+
+/// [`resolve_open_target`] with the user's well-known folders given.
+/// Desktop, Downloads and Documents hold many unrelated files, and as a
+/// project Texo would keep its files there, scan it and keep its history.
+fn resolve_open_target_with(path: &Path, home: Option<&Path>, shell: &[(PathBuf, &str)]) -> AppResult<(PathBuf, Option<String>)> {
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Err(AppError::msg(
+                "Texo can't find that folder. It may have been moved, renamed or deleted, or it's on a drive that isn't connected.",
+            ))
+        }
+        Err(e) => return Err(explain_io(e, false)),
+    };
+    let (dir, file) = if meta.is_file() {
+        if !is_tex(path) {
+            return Err(AppError::msg("Texo opens folders and .tex files. Pick the folder that holds your LaTeX files."));
+        }
+        let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        (dir.to_path_buf(), path.file_name().map(|n| n.to_string_lossy().into_owned()))
+    } else {
+        (path.to_path_buf(), None)
+    };
+    if dir.parent().is_none() {
+        return Err(AppError::msg("That's a whole drive. Pick the folder that holds your LaTeX files."));
+    }
+    if home.is_some_and(|h| same_path(h, &dir)) {
+        return Err(AppError::msg("That's your home folder. Pick the folder that holds your LaTeX files."));
+    }
+    if let Some((_, name)) = shell.iter().find(|(d, _)| same_path(d, &dir)) {
+        // A folder that already is a Texo project keeps working.
+        if !meta_path(&dir).is_file() {
+            let what = if file.is_some() { "That file is right in" } else { "That's" };
+            return Err(AppError::msg(format!(
+                "{what} your {name} folder, which holds lots of other files. Texo would treat all of them as one project. \
+                 Make a new folder for the paper, move the .tex file and its pictures and .bib into it, and open that folder."
+            )));
+        }
+    }
+    Ok((dir, file))
+}
+
+/// `project.json`, or `None` when there is none or it is damaged. An error
+/// only when the file exists but can't be read (offline cloud file…), so a
+/// readable-later project is never replaced.
+fn read_meta_strict(dir: &Path) -> AppResult<Option<ProjectMeta>> {
+    match fs::read(meta_path(dir)) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(explain_io(e, false)),
+    }
+}
+
+/// Paths longer than this risk failing in TeX tools on Windows once the
+/// build folder and file names are added.
+const LONG_PATH_WARNING: usize = 200;
+
+/// Opens `dir` as a project: reads (or creates) its metadata, re-detects a
+/// main document that no longer exists, and collects what the user should
+/// hear about. `file` is a `.tex` file in `dir` the user opened directly; it
+/// becomes the main document when it starts a document.
+pub fn open(dir: &Path, file: Option<&str>, external: bool) -> AppResult<ProjectSummary> {
+    let mut notices = Vec::new();
+    let (mut meta, adopted) = match read_meta_strict(dir)? {
+        Some(meta) => (meta, false),
+        None => {
+            if let Some(kept) = set_aside_damaged_meta(dir) {
+                notices.push(format!(
+                    "Texo's project info in this folder was damaged, so it was set up again (the old file was kept as .texo/{kept}). Your LaTeX files are untouched."
+                ));
+            }
+            (new_meta(folder_name(dir).unwrap_or_else(|| "Untitled".into()), None), true)
+        }
+    };
+    let mut changed = adopted;
+    let exists = |m: &Option<String>| m.as_deref().is_some_and(|m| dir.join(m).is_file());
+
+    if let Some(file) = file {
+        let text = fs::read(dir.join(file)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        if MainCandidate::from_text(file.to_string(), &text).has_documentclass {
+            if meta.main_document.as_deref() != Some(file) {
+                if !adopted && exists(&meta.main_document) {
+                    notices.push(format!(
+                        "Texo will now compile “{file}” (before, it compiled “{}”).",
+                        meta.main_document.as_deref().unwrap_or_default()
+                    ));
+                }
+                meta.main_document = Some(file.to_string());
+                changed = true;
+            }
+        } else if exists(&meta.main_document) {
+            notices.push(format!(
+                "“{file}” is part of this project; Texo compiles “{}”, which includes the rest.",
+                meta.main_document.as_deref().unwrap_or_default()
+            ));
+        }
+    }
+
+    let mut candidates = Vec::new();
+    if !exists(&meta.main_document) {
+        let scan = scan_main_candidates(dir);
+        let ranked = rank_main_candidates_in(&scan.candidates, folder_name(dir).as_deref());
+        let old = meta.main_document.take();
+        meta.main_document = ranked.first().cloned().or_else(|| rank_main_candidates(&scan.candidates));
+        changed = true;
+        match (&old, &meta.main_document) {
+            (Some(old), Some(new)) => notices.push(format!(
+                "The main file “{old}” is no longer in this folder, so Texo will compile “{new}” instead."
+            )),
+            (Some(old), None) => notices.push(format!(
+                "The main file “{old}” is no longer in this folder, and no other file starts a LaTeX document \
+                 (a .tex file with a \\documentclass line). Add one, or right-click a .tex file and choose “Set as main document”."
+            )),
+            (None, None) => notices.push(
+                "Texo didn't find a LaTeX document here (a .tex file with a \\documentclass line, which starts a document). \
+                 Add one, or right-click a .tex file and choose “Set as main document”."
+                    .to_string(),
+            ),
+            (None, Some(_)) => {}
+        }
+        if scan.cloud_only > 0 {
+            notices.push(format!(
+                "{} .tex file{} in this folder {} kept only in OneDrive (or another cloud folder) and couldn't be read. \
+                 In File Explorer, right-click the folder and choose “Always keep on this device” so Texo can compile it.",
+                scan.cloud_only,
+                if scan.cloud_only == 1 { "" } else { "s" },
+                if scan.cloud_only == 1 { "is" } else { "are" },
+            ));
+        }
+        // Offer a choice only among complete documents when there are any.
+        let complete = |p: &String| scan.candidates.iter().any(|c| &c.path == p && c.is_complete());
+        candidates = if ranked.iter().any(complete) { ranked.into_iter().filter(complete).collect() } else { ranked };
+    }
+
+    if changed {
+        write_meta(dir, &meta).map_err(|e| explain(e, true))?;
+    }
+    let mut summary = summarize(dir, external).ok_or_else(|| AppError::msg("Couldn't read that project."))?;
+    if cfg!(windows) && dir.as_os_str().len() > LONG_PATH_WARNING {
+        notices.push(
+            "This folder's location is very long. If compiling fails with a “file not found” error, move the folder \
+             closer to the top of a drive (for example C:\\Papers)."
+                .to_string(),
+        );
+    }
+    summary.notices = notices;
+    if candidates.len() > 1 {
+        candidates.truncate(8);
+        summary.main_candidates = candidates;
+    }
+    Ok(summary)
+}
+
+/// Before compiling: if the main document was deleted or renamed since the
+/// project was opened, picks another one. Returns what to tell the user.
+pub fn repair_main_document(dir: &Path) -> AppResult<(ProjectMeta, Option<String>)> {
+    let mut meta = ensure_meta(dir)?;
+    let Some(old) = meta.main_document.clone() else { return Ok((meta, None)) };
+    if dir.join(&old).is_file() {
+        return Ok((meta, None));
+    }
+    meta.main_document = detect_main_document(dir);
+    write_meta(dir, &meta)?;
+    let note = match &meta.main_document {
+        Some(new) => format!("The main file “{old}” is no longer in the project, so Texo compiled “{new}” instead. Right-click a .tex file and choose “Set as main document” to change it."),
+        None => format!("The main file “{old}” is no longer in the project. Right-click a .tex file and choose “Set as main document”."),
+    };
+    Ok((meta, Some(note)))
+}
+
+/// Biggest folder [`copy_into`] copies.
+const MAX_COPY_FILES: usize = 20_000;
+const MAX_COPY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Copies a folder Texo can't write to into `root` as a new project (for
+/// read-only folders). Version control and Texo's own folders are left out.
+/// `file` is a `.tex` file in `src` the user opened directly.
+pub fn copy_into(src: &Path, file: Option<&str>, root: &Path) -> AppResult<ProjectSummary> {
+    let mut files = Vec::new();
+    let mut bytes = 0u64;
+    for e in WalkDir::new(src).min_depth(1).into_iter().filter_entry(|e| !skipped_dir(e)) {
+        let e = e.map_err(|e| AppError::msg(e.to_string()))?;
+        if e.file_type().is_file() {
+            bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
+            files.push(e.into_path());
+        }
+        if files.len() > MAX_COPY_FILES || bytes > MAX_COPY_BYTES {
+            return Err(AppError::msg(
+                "That folder is too big to copy (over 20,000 files or 2 GB). Copy just the folder with your paper and open that.",
+            ));
+        }
+    }
+    let name = folder_name(src).unwrap_or_else(|| "Untitled".into());
+    fs::create_dir_all(root)?;
+    let target = unique_dir(root, &name);
+    let copy = || -> AppResult<()> {
+        fs::create_dir_all(&target)?;
+        for file in &files {
+            let rel = file.strip_prefix(src).map_err(|e| AppError::msg(e.to_string()))?;
+            let dest = target.join(rel);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(file, &dest)?;
+        }
+        Ok(())
+    };
+    if let Err(e) = copy() {
+        // Only ever the folder this call just created.
+        let _ = fs::remove_dir_all(&target);
+        return Err(explain(e, false));
+    }
+    open(&target, file, false)
 }
 
 pub const RESERVED_NAMES: &[&str] = &[
@@ -450,13 +953,20 @@ pub fn rename(dir: &Path, new_name: &str, rename_folder: bool) -> AppResult<Path
     }
 }
 
+/// `.texo/history`, its settings file and any `history.broken-*` folders:
+/// a copy starts with a fresh history.
+fn is_history_data(rel: &Path) -> bool {
+    let mut parts = rel.components();
+    parts.next().is_some_and(|c| c.as_os_str() == META_DIR)
+        && parts.next().is_some_and(|c| c.as_os_str().to_string_lossy().starts_with("history"))
+}
+
 /// Copies the project into `root` as "Copy of …", with a fresh id. Version
 /// history and build files are not copied.
 pub fn duplicate(dir: &Path, root: &Path) -> AppResult<ProjectSummary> {
     let source = ensure_meta(dir)?;
     let name = format!("Copy of {}", source.name);
     let target = unique_dir(root, &name);
-    let history = Path::new(META_DIR).join("history");
     let build = Path::new(META_DIR).join("build");
 
     for entry in WalkDir::new(dir).min_depth(1) {
@@ -465,7 +975,7 @@ pub fn duplicate(dir: &Path, root: &Path) -> AppResult<ProjectSummary> {
             .path()
             .strip_prefix(dir)
             .map_err(|e| AppError::msg(e.to_string()))?;
-        if rel.starts_with(&history) || rel.starts_with(&build) {
+        if is_history_data(rel) || rel.starts_with(&build) {
             continue;
         }
         let dest = target.join(rel);
@@ -565,7 +1075,7 @@ pub fn list_files(dir: &Path) -> Vec<FileEntry> {
             })
         })
         .collect();
-    out.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+    out.sort_by_key(|e| e.path.to_lowercase());
     out
 }
 
@@ -626,8 +1136,274 @@ mod tests {
         .unwrap();
         assert_eq!(detect_main_document(dir.path()).as_deref(), Some("paper/article.tex"));
 
+        // An empty main.tex no longer beats a real document…
         fs::write(dir.path().join("main.tex"), "").unwrap();
+        assert_eq!(detect_main_document(dir.path()).as_deref(), Some("paper/article.tex"));
+        // …but a main.tex that starts a document does.
+        fs::write(dir.path().join("main.tex"), "\\documentclass{article}").unwrap();
         assert_eq!(detect_main_document(dir.path()).as_deref(), Some("main.tex"));
+    }
+
+    const FULL: &str = "\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n";
+
+    fn write(dir: &Path, rel: &str, text: &str) {
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn ranks_the_paper_above_template_examples() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("E_L2R");
+        // An Elsevier-style folder: the class's sample documents next to the paper.
+        write(&root, "cas-dc-template.tex", FULL);
+        write(&root, "example_sc.tex", FULL);
+        write(&root, "L2R.tex", "\\documentclass{cas-dc}\n\\begin{document}\n\\input{sections/intro}\n\\bibliography{AHR}\n\\end{document}\n");
+        write(&root, "sections/intro.tex", "\\section{Intro}");
+        assert_eq!(detect_main_document(&root).as_deref(), Some("L2R.tex"));
+
+        // A file named like the folder wins among otherwise equal documents.
+        let named = dir.path().join("my-thesis");
+        write(&named, "a.tex", FULL);
+        write(&named, "My_Thesis.tex", FULL);
+        assert_eq!(detect_main_document(&named).as_deref(), Some("My_Thesis.tex"));
+
+        // A complete document that another one \\inputs (a standalone
+        // chapter) isn't the main one.
+        let c = |path: &str, text: &str| MainCandidate::from_text(path.into(), text);
+        let ranked = rank_main_candidates_in(
+            &[c("chapters/one.tex", FULL), c("book.tex", &format!("{FULL}\\include{{chapters/one}}"))],
+            None,
+        );
+        assert_eq!(ranked, vec!["book.tex", "chapters/one.tex"]);
+        // Comments, including trailing ones, don't count.
+        assert!(!c("x.tex", "text % \\documentclass{article}").has_documentclass);
+        assert!(c("x.tex", "\\documentclass{article} % main").has_documentclass);
+    }
+
+    #[test]
+    fn finds_a_paper_nested_deep_in_a_code_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        write(&repo, "src/model/train.py", "print()");
+        write(&repo, "node_modules/pkg/docs/sample.tex", FULL);
+        write(&repo, "paper/conference/2026/camera-ready/final/main.tex", FULL);
+        assert_eq!(
+            detect_main_document(&repo).as_deref(),
+            Some("paper/conference/2026/camera-ready/final/main.tex")
+        );
+    }
+
+    #[test]
+    fn opening_a_project_whose_main_document_is_gone_re_detects_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Paper");
+        write(&root, "main.tex", FULL);
+        let first = open(&root, None, true).unwrap();
+        assert_eq!(first.main_document.as_deref(), Some("main.tex"));
+        assert!(first.notices.is_empty(), "{:?}", first.notices);
+
+        fs::rename(root.join("main.tex"), root.join("paper.tex")).unwrap();
+        let again = open(&root, None, true).unwrap();
+        assert_eq!(again.main_document.as_deref(), Some("paper.tex"));
+        assert!(again.notices[0].contains("“main.tex” is no longer"), "{:?}", again.notices);
+        assert_eq!(again.id, first.id, "same project, not a new one");
+
+        // Compiling repairs it too, with a hint for the compile panel.
+        fs::rename(root.join("paper.tex"), root.join("renamed.tex")).unwrap();
+        let (meta, note) = repair_main_document(&root).unwrap();
+        assert_eq!(meta.main_document.as_deref(), Some("renamed.tex"));
+        assert!(note.unwrap().contains("renamed.tex"));
+        assert!(repair_main_document(&root).unwrap().1.is_none());
+    }
+
+    #[test]
+    fn opening_offers_a_choice_when_several_files_could_be_the_main_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Talks");
+        write(&root, "slides.tex", FULL);
+        write(&root, "handout.tex", FULL);
+        write(&root, "notes.tex", "\\section{Not a document}");
+        let opened = open(&root, None, true).unwrap();
+        assert_eq!(opened.main_candidates, vec!["handout.tex", "slides.tex"]);
+        // Once chosen, opening again doesn't ask again.
+        set_main_document(&root, "slides.tex").unwrap();
+        assert!(open(&root, None, true).unwrap().main_candidates.is_empty());
+    }
+
+    #[test]
+    fn opening_a_tex_file_opens_its_folder_and_compiles_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Work");
+        write(&root, "main.tex", FULL);
+        write(&root, "poster.tex", FULL);
+        write(&root, "part.tex", "\\section{A}");
+
+        let (folder, file) = resolve_open_target(&root.join("poster.tex"), None).unwrap();
+        assert_eq!(folder, root);
+        assert_eq!(file.as_deref(), Some("poster.tex"));
+        let opened = open(&folder, file.as_deref(), true).unwrap();
+        assert_eq!(opened.main_document.as_deref(), Some("poster.tex"));
+        assert!(opened.main_candidates.is_empty(), "the user already chose");
+
+        // A fragment keeps the current main document, and says why.
+        let opened = open(&root, Some("part.tex"), true).unwrap();
+        assert_eq!(opened.main_document.as_deref(), Some("poster.tex"));
+        assert!(opened.notices[0].contains("part.tex"));
+
+        assert!(resolve_open_target(&root.join("notes.pdf"), None).is_err());
+        fs::write(root.join("notes.pdf"), "%PDF").unwrap();
+        let err = resolve_open_target(&root.join("notes.pdf"), None).unwrap_err().to_string();
+        assert!(err.contains(".tex files"), "{err}");
+    }
+
+    #[test]
+    fn explains_folders_that_cannot_be_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = resolve_open_target(&dir.path().join("moved away"), None).unwrap_err().to_string();
+        assert!(gone.contains("can't find that folder"), "{gone}");
+        let home = resolve_open_target(dir.path(), Some(dir.path())).unwrap_err().to_string();
+        assert!(home.contains("home folder"), "{home}");
+        let drive = if cfg!(windows) { "C:\\" } else { "/" };
+        assert!(resolve_open_target(Path::new(drive), None).unwrap_err().to_string().contains("whole drive"));
+
+        // Read-only folders get a plain explanation the UI can act on.
+        let denied = std::io::Error::from(ErrorKind::PermissionDenied);
+        let text = explain_io(denied, true).to_string();
+        assert!(text.starts_with(READ_ONLY_MARK) && text.contains("read-only"), "{text}");
+        let text = explain_io(std::io::Error::from(ErrorKind::PermissionDenied), false).to_string();
+        assert!(!text.starts_with(READ_ONLY_MARK));
+        #[cfg(windows)]
+        {
+            let cloud = explain_io(std::io::Error::from_raw_os_error(362), false).to_string();
+            assert!(cloud.contains("OneDrive"), "{cloud}");
+        }
+    }
+
+    #[test]
+    fn opens_folders_with_awkward_names_and_long_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["My Paper, final (v2)", "Tez çalışması – 論文", "a&b;c'd"] {
+            let root = dir.path().join(name);
+            write(&root, "main file.tex", FULL);
+            let opened = open(&root, None, true).unwrap();
+            assert_eq!(opened.name, name);
+            assert_eq!(opened.main_document.as_deref(), Some("main file.tex"));
+            assert_eq!(list(dir.path().join("none").as_path(), std::slice::from_ref(&root))[0].id, opened.id);
+        }
+        // Deeper than Windows' classic 260-character limit.
+        let mut deep = dir.path().join("long");
+        while deep.as_os_str().len() < 300 {
+            deep = deep.join("a folder with a fairly long name");
+        }
+        write(&deep, "main.tex", FULL);
+        let opened = open(&deep, None, true).unwrap();
+        assert_eq!(opened.main_document.as_deref(), Some("main.tex"));
+        if cfg!(windows) {
+            assert!(opened.notices.iter().any(|n| n.contains("very long")), "{:?}", opened.notices);
+        }
+    }
+
+    #[test]
+    fn a_damaged_project_file_is_kept_and_the_project_set_up_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Paper");
+        write(&root, "main.tex", FULL);
+        write(&root, ".texo/project.json", "{ broken");
+        let opened = open(&root, None, true).unwrap();
+        assert_eq!(opened.main_document.as_deref(), Some("main.tex"));
+        assert!(opened.notices[0].contains("damaged"), "{:?}", opened.notices);
+        let kept = fs::read_dir(root.join(META_DIR))
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("project.damaged-"))
+            .count();
+        assert_eq!(kept, 1);
+    }
+
+    #[test]
+    fn lists_missing_external_folders_instead_of_hiding_them() {
+        let root = tempfile::tempdir().unwrap();
+        let away = root.path().join("Moved paper");
+        let listed = list(&root.path().join("projects"), std::slice::from_ref(&away));
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].missing && listed[0].external);
+        assert_eq!(listed[0].name, "Moved paper");
+        // Back in place, it lists normally again.
+        write(&away, "main.tex", FULL);
+        open(&away, None, true).unwrap();
+        assert!(!list(&root.path().join("projects"), std::slice::from_ref(&away))[0].missing);
+
+        // Its project info deleted or damaged: the folder is still there, so
+        // it isn't "not found"; opening it sets it up again.
+        fs::remove_file(meta_path(&away)).unwrap();
+        let row = &list(&root.path().join("projects"), std::slice::from_ref(&away))[0];
+        assert!(!row.missing && row.needs_setup && row.external, "{row:?}");
+        assert_eq!(row.name, "Moved paper");
+        assert!(open(&away, None, true).is_ok());
+        assert!(!list(&root.path().join("projects"), &[away])[0].needs_setup);
+    }
+
+    #[test]
+    fn refuses_desktop_downloads_and_documents_as_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let downloads = dir.path().join("Downloads");
+        write(&downloads, "paper.tex", FULL);
+        write(&downloads, "setup.exe", "");
+        let shell = [(downloads.clone(), "Downloads")];
+        let err = resolve_open_target_with(&downloads.join("paper.tex"), None, &shell).unwrap_err().to_string();
+        assert!(err.contains("right in your Downloads folder") && err.contains("new folder"), "{err}");
+        let err = resolve_open_target_with(&downloads, None, &shell).unwrap_err().to_string();
+        assert!(err.starts_with("That's your Downloads folder"), "{err}");
+        // A subfolder is fine.
+        let paper = downloads.join("paper");
+        write(&paper, "main.tex", FULL);
+        assert!(resolve_open_target_with(&paper.join("main.tex"), None, &shell).is_ok());
+        // One that already is a Texo project keeps opening.
+        open(&downloads, None, true).unwrap();
+        assert!(resolve_open_target_with(&downloads.join("paper.tex"), None, &shell).is_ok());
+    }
+
+    #[test]
+    fn copies_a_read_only_folder_into_the_projects_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("Shared paper");
+        write(&src, "main.tex", FULL);
+        write(&src, "figs/a.png", "png");
+        write(&src, ".git/HEAD", "ref");
+        write(&src, ".texo/project.json", "{}");
+        let projects = dir.path().join("Texo");
+        let copy = copy_into(&src, None, &projects).unwrap();
+        let target = PathBuf::from(&copy.path);
+        assert!(target.starts_with(&projects));
+        assert!(target.join("figs/a.png").is_file());
+        assert!(!target.join(".git").exists());
+        assert_eq!(copy.main_document.as_deref(), Some("main.tex"));
+        assert!(!copy.external);
+
+        // A .tex file opened directly stays the main document in the copy.
+        write(&src, "poster.tex", FULL);
+        let copy = copy_into(&src, Some("poster.tex"), &projects).unwrap();
+        assert!(copy.path.ends_with("Shared paper (2)"), "{}", copy.path);
+        assert_eq!(copy.main_document.as_deref(), Some("poster.tex"));
+    }
+
+    /// Unix only: Windows' read-only attribute doesn't stop new files in a folder.
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_read_only_folder_says_so_and_changes_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Locked");
+        write(&root, "main.tex", FULL);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(root.join("probe"), "").is_ok() {
+            return; // running as root: permissions aren't enforced
+        }
+        let err = open(&root, None, true).unwrap_err().to_string();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(err.starts_with(READ_ONLY_MARK), "{err}");
+        assert!(!root.join(META_DIR).exists());
     }
 
     #[test]
@@ -773,6 +1549,8 @@ mod tests {
         let src = PathBuf::from(&p.path);
         fs::create_dir_all(src.join(META_DIR).join("history")).unwrap();
         fs::write(src.join(META_DIR).join("history").join("v1"), "old").unwrap();
+        fs::write(src.join(META_DIR).join("history.json"), "{}").unwrap();
+        fs::create_dir_all(src.join(META_DIR).join("history.broken-1")).unwrap();
         fs::create_dir_all(src.join(META_DIR).join("build")).unwrap();
         fs::write(src.join(META_DIR).join("build").join("main.aux"), "aux").unwrap();
         fs::create_dir_all(src.join("figures")).unwrap();
@@ -784,6 +1562,8 @@ mod tests {
         assert!(dst.join("references.bib").is_file());
         assert!(dst.join("figures").is_dir());
         assert!(!dst.join(META_DIR).join("history").exists());
+        assert!(!dst.join(META_DIR).join("history.json").exists());
+        assert!(!dst.join(META_DIR).join("history.broken-1").exists());
         assert!(!dst.join(META_DIR).join("build").exists());
     }
 

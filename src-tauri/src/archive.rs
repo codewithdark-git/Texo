@@ -595,7 +595,7 @@ impl<'a> Ticker<'a> {
 
     fn tick(&mut self) {
         self.done += 1;
-        if self.done % self.step == 0 || self.done == self.total {
+        if self.done.is_multiple_of(self.step) || self.done == self.total {
             (self.progress)(self.done, self.total);
         }
     }
