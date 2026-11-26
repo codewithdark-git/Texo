@@ -963,3 +963,17 @@ fn real_pdflatex_log_and_pdf_feed_the_checklist() {
         "{o:#?}"
     );
 }
+
+#[test]
+fn reference_links_keep_web_urls_only() {
+    let v = json!({"references": [
+        {"title": "Web", "url": "https://arxiv.org/abs/2401.00001"},
+        {"title": "File", "url": "file:///C:/Windows/System32/calc.exe"},
+        {"title": "Script", "url": "javascript:alert(1)"},
+        {"title": "App", "url": "ms-settings:privacy"},
+        {"title": "Plain http", "url": "HTTP://example.org/paper"}
+    ]});
+    let r = ReviewReport::from_value(&v);
+    let urls: Vec<Option<&str>> = r.references.iter().map(|x| x.url.as_deref()).collect();
+    assert_eq!(urls, [Some("https://arxiv.org/abs/2401.00001"), None, None, None, Some("HTTP://example.org/paper")]);
+}

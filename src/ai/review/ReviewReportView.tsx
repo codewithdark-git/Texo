@@ -7,6 +7,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { isOpenableLink } from "../chat/markdown";
 import {
   AlertTriangle,
   BookOpen,
@@ -223,7 +224,14 @@ function ReportBody({ project, report, rubric: given }: Omit<ReviewReportViewPro
           </h3>
           <ul className="space-y-1.5 text-xs">
             {(report.references ?? []).map((ref, i) => {
-              const link = ref.url || (ref.doi ? `https://doi.org/${ref.doi}` : ref.arxivId ? `https://arxiv.org/abs/${ref.arxivId}` : null);
+              // The model wrote these: only web links open, and ids are encoded.
+              const link = isOpenableLink(ref.url ?? null)
+                ? ref.url
+                : ref.doi
+                  ? `https://doi.org/${encodeURI(ref.doi.trim())}`
+                  : ref.arxivId
+                    ? `https://arxiv.org/abs/${encodeURIComponent(ref.arxivId.trim())}`
+                    : null;
               return (
                 <li key={i} className="select-text">
                   <span className="font-medium">{ref.title}</span>

@@ -866,11 +866,18 @@ fn reference_of(v: &Value) -> Option<ReportReference> {
             venue: str_of(o.get("venue")),
             doi: str_of(o.get("doi")),
             arxiv_id: str_of(o.get("arxivId").or(o.get("arxiv_id")).or(o.get("arxiv"))),
-            url: str_of(o.get("url")),
+            // Model-written: keep web links only (no file:, javascript: or app schemes).
+            url: str_of(o.get("url")).filter(|u| is_web_url(u)),
             note: str_of(o.get("note").or(o.get("why"))),
         }),
         _ => None,
     }
+}
+
+/// `http(s)://` links only.
+fn is_web_url(u: &str) -> bool {
+    let l = u.trim().to_ascii_lowercase();
+    (l.starts_with("https://") || l.starts_with("http://")) && l.len() > 8
 }
 
 // ---------------------------------------------------------------------------
