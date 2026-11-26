@@ -1,16 +1,21 @@
+mod agents;
+mod ai;
 mod archive;
 mod bibinputs;
+mod chat;
 mod commands;
 mod compile;
 mod engine;
 mod error;
 mod fsops;
+mod history;
 mod project;
 mod settings;
 mod symbols;
 mod synctex;
 mod templates;
 mod texlog;
+mod texpkg;
 mod watcher;
 
 use std::path::PathBuf;
@@ -19,8 +24,10 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 pub struct AppState {
+    /// This process's view of `settings.json`, refreshed when another Texo
+    /// process saves it. Change it only through `settings_file.update`.
     pub settings: settings::Settings,
-    pub settings_path: PathBuf,
+    pub settings_file: settings::SettingsFile,
     /// Watches the project open in the workspace, if any.
     pub watcher: Option<watcher::ProjectWatcher>,
     /// Where Texo keeps tools it downloads, such as Tectonic.
@@ -41,19 +48,39 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Reopens the window where the user left it (size, position, maximized).
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Files dropped on the window may be attached to a chat message
+        // (chat::dropped reads only paths that were really dropped).
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                chat::dropped::remember(paths);
+            }
+        })
+        .on_webview_event(|_webview, event| {
+            if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                chat::dropped::remember(paths);
+            }
+        })
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let tools_dir = app.path().app_data_dir()?.join("tools");
-            let settings = settings::Settings::load(&settings_path, default_projects_root());
-            std::fs::create_dir_all(&settings.projects_root)?;
+            let mut settings_file = settings::SettingsFile::new(settings_path, default_projects_root());
+            let settings = settings_file.load();
+            // A projects folder on a drive that isn't connected must not stop
+            // Texo from starting; creating a project reports the problem.
+            let _ = std::fs::create_dir_all(&settings.projects_root);
             app.manage(Mutex::new(AppState {
                 settings,
-                settings_path,
+                settings_file,
                 watcher: None,
                 tools_dir,
             }));
             app.manage(compile::Running::default());
             app.manage(commands::SyncCache::default());
+            app.manage(ai::AiState::new(
+                &app.path().app_config_dir()?,
+                &app.path().app_data_dir()?,
+            ));
+            app.manage(agents::commands::runtime_for(app.handle()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -62,6 +89,7 @@ pub fn run() {
             commands::list_projects,
             commands::create_project,
             commands::open_folder,
+            commands::copy_folder_to_projects,
             commands::rename_project,
             commands::duplicate_project,
             commands::delete_project,
@@ -95,6 +123,66 @@ pub fn run() {
             commands::export_project,
             commands::save_pdf_as,
             commands::read_asset,
+            texpkg::install_tex_package,
+            ai::commands::ai_get_settings,
+            ai::commands::ai_update_settings,
+            ai::commands::ai_list_providers,
+            ai::commands::ai_key_status,
+            ai::commands::ai_set_key,
+            ai::commands::ai_clear_key,
+            ai::commands::ai_list_models,
+            ai::commands::ai_test_connection,
+            ai::commands::ai_preview_context,
+            ai::commands::ai_explain_and_fix,
+            ai::commands::ai_cancel,
+            ai::commands::ai_check_edits,
+            ai::commands::ai_install_package,
+            agents::tools::web_settings::web_tools_status,
+            agents::tools::web_settings::web_tools_set_key,
+            agents::tools::web_settings::web_tools_clear_key,
+            agents::tools::web_settings::web_tools_update_settings,
+            history::commands::history_status,
+            history::commands::history_log,
+            history::commands::history_changes,
+            history::commands::history_diff,
+            history::commands::history_restore_file,
+            history::commands::history_restore_all,
+            history::commands::history_undo_run,
+            history::commands::history_label,
+            history::commands::history_snapshot,
+            history::commands::history_set_enabled,
+            history::commands::history_git_exclude,
+            chat::commands::ai_chat_list,
+            chat::commands::ai_chat_get,
+            chat::commands::ai_chat_new,
+            chat::commands::ai_chat_rename,
+            chat::commands::ai_chat_delete,
+            chat::commands::ai_chat_send,
+            chat::commands::ai_chat_cancel,
+            chat::dropped::ai_chat_read_dropped,
+            agents::commands::agent_start,
+            agents::commands::agent_list,
+            agents::commands::agent_get,
+            agents::commands::agent_cancel,
+            agents::commands::agent_respond,
+            agents::commands::agent_changeset,
+            agents::commands::agent_apply,
+            agents::commands::agent_discard,
+            agents::commands::agent_delete,
+            agents::review::review_presets,
+            agents::review::review_checklist,
+            agents::profile_commands::agent_profiles_list,
+            agents::profile_commands::agent_profiles_save,
+            agents::profile_commands::agent_profiles_delete,
+            agents::profile_commands::agent_profiles_reset,
+            agents::profile_commands::agent_defaults_save,
+            agents::profile_commands::memory_get,
+            agents::profile_commands::memory_set,
+            agents::profile_commands::memory_clear,
+            agents::profile_commands::memory_add,
+            agents::ui_support::agent_kind_tools,
+            agents::ui_support::review_render,
+            agents::ui_support::review_save_as,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Texo");

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowLeft, Columns2, FileCode2, FileText, ListTree, Files, Search, X } from "lucide-react";
+import { ArrowLeft, Columns2, FileCode2, FileText, History, ListTree, Files, Search, X } from "lucide-react";
 import { SHOW_PDF_EVENT, type ProjectSummary } from "../lib/api";
 import { useApp } from "../store";
 import { Button } from "../components/Dialog";
@@ -9,10 +9,15 @@ import { AppMenu } from "../components/AppMenu";
 import { SupportTopButton } from "../components/SupportDialog";
 import { countMarkdownWords, countWords } from "../lib/wordcount";
 import { formatRelative } from "../lib/projects";
-import { useUi } from "../ui";
+import { toast, useUi } from "../ui";
 import { useCompile } from "./compileStore";
 import { baseName } from "./paths";
 import { QuickOpen } from "./QuickOpen";
+import { FixDialog } from "../ai/FixDialog";
+import { AiPanel, AiPanelButton } from "../ai/panel/AiPanel";
+import { useAiPanel } from "../ai/panel/aiPanelStore";
+import { attachPaths, CHAT_DROP_ATTR } from "../ai/chat/composerActions";
+import { routeDrop } from "../ai/pathDrop";
 import { zoomEditor } from "./EditorPane";
 import { getModel } from "./store";
 import { CompileControls } from "./CompileControls";
@@ -24,9 +29,11 @@ import { SearchPanel } from "./SearchPanel";
 import { TabBar } from "./TabBar";
 import { useWorkspace } from "./store";
 import { showsVisual } from "./editorBridge";
+import { HistoryPanel, HistoryStatusItem } from "../history/HistoryPanel";
+import { useHistory } from "../history/historyStore";
 
 type Layout = "split" | "code" | "pdf";
-type Panel = "files" | "outline" | "search";
+type Panel = "files" | "outline" | "search" | "history";
 
 const LAYOUT_KEY = "texo.layout";
 
@@ -99,6 +106,21 @@ export function Workspace({ project }: { project: ProjectSummary }) {
     };
   }, [project.path]);
 
+  // History status for the status bar and the History tab; new versions
+  // appear after saves (30 s idle), compiles and AI runs, so check now and then.
+  useEffect(() => {
+    useHistory.getState().setProject(project.path);
+    const timer = setInterval(() => void useHistory.getState().refreshStatus(), 30_000);
+    const offCompile = useCompile.subscribe((s, prev) => {
+      if (s.finishedAt !== prev.finishedAt) void useHistory.getState().refreshStatus();
+    });
+    return () => {
+      clearInterval(timer);
+      offCompile();
+      useHistory.getState().setProject(null);
+    };
+  }, [project.path]);
+
   // Showing the PDF needs the preview pane visible.
   useEffect(() => {
     const show = () => setPrefs((p) => (p.layout === "code" ? { ...p, layout: "split" } : p));
@@ -125,7 +147,10 @@ export function Workspace({ project }: { project: ProjectSummary }) {
         e.preventDefault();
         e.stopPropagation();
       };
-      if (key === "f" && e.shiftKey) {
+      if (key === "a" && e.shiftKey) {
+        handled();
+        useAiPanel.getState().toggle();
+      } else if (key === "f" && e.shiftKey) {
         handled();
         setPanel("search");
         setSearchFocus((n) => n + 1);
@@ -176,6 +201,27 @@ export function Workspace({ project }: { project: ProjectSummary }) {
     };
     const pending = getCurrentWebview().onDragDropEvent((event) => {
       const p = event.payload;
+      // Files dropped on the chat composer are attached to the message instead.
+      const overChat = (x: number, y: number) => {
+        const ratio = window.devicePixelRatio || 1;
+        return !!document.elementFromPoint(x / ratio, y / ratio)?.closest(`[${CHAT_DROP_ATTR}]`);
+      };
+      if (p.type === "drop" && overChat(p.position.x, p.position.y)) {
+        setDropTarget(null);
+        attachPaths(p.paths);
+        return;
+      }
+      // A dialog that takes attachments gets them; other dialogs take nothing (FE-2).
+      if (p.type === "drop") {
+        const ratio = window.devicePixelRatio || 1;
+        const route = routeDrop(document.elementFromPoint(p.position.x / ratio, p.position.y / ratio));
+        if (route) {
+          setDropTarget(null);
+          if (route === "blocked") toast("Close this window first to add files to the project.", "info");
+          else route(p.paths);
+          return;
+        }
+      }
       if (p.type === "over") setDropTarget(folderAt(p.position.x, p.position.y));
       else if (p.type === "leave") setDropTarget(null);
       else if (p.type === "drop") {
@@ -194,6 +240,7 @@ export function Workspace({ project }: { project: ProjectSummary }) {
   return (
     <div className="flex h-full flex-col">
       {dialog === "quickOpen" && <QuickOpen onClose={() => useUi.getState().openDialog(null)} />}
+      <FixDialog />
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
         <Button variant="ghost" onClick={() => void close()} aria-label="Back to projects">
           <ArrowLeft size={16} />
@@ -232,6 +279,7 @@ export function Workspace({ project }: { project: ProjectSummary }) {
             </button>
           ))}
         </div>
+        <AiPanelButton project={project.path} />
         <SupportTopButton />
         <AppMenu />
       </header>
@@ -253,19 +301,20 @@ export function Workspace({ project }: { project: ProjectSummary }) {
                 ["files", "Files", Files],
                 ["outline", "Outline", ListTree],
                 ["search", "Search", Search],
+                ["history", "History", History],
               ] as const
             ).map(([value, label, Icon]) => (
               <button
                 key={value}
                 type="button"
                 aria-pressed={panel === value}
-                title={value === "search" ? "Search in project (Ctrl+Shift+F)" : undefined}
+                title={value === "search" ? "Search in project (Ctrl+Shift+F)" : value === "history" ? "Every saved version of this project" : label}
                 onClick={() => setPanel(value)}
                 className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-xs ${
                   panel === value ? "bg-surface-2 text-text" : "text-muted hover:text-text"
                 }`}
               >
-                <Icon size={14} /> {label}
+                <Icon size={14} /> <span className="truncate">{label}</span>
               </button>
             ))}
           </div>
@@ -273,6 +322,8 @@ export function Workspace({ project }: { project: ProjectSummary }) {
             <FileTree dropTarget={dropTarget} />
           ) : panel === "outline" ? (
             <Outline />
+          ) : panel === "history" ? (
+            <HistoryPanel />
           ) : (
             <SearchPanel focusKey={searchFocus} />
           )}
@@ -299,7 +350,7 @@ export function Workspace({ project }: { project: ProjectSummary }) {
             <section style={{ flex: showPdf ? prefs.split : 1 }} className="flex min-w-0 flex-col">
               <TabBar />
               <EditorPane />
-              <StatusBar />
+              <StatusBar onHistory={() => setPanel("history")} />
             </section>
           )}
           {showCode && showPdf && (
@@ -324,6 +375,7 @@ export function Workspace({ project }: { project: ProjectSummary }) {
             </section>
           )}
         </div>
+        <AiPanel project={project.path} />
       </div>
     </div>
   );
@@ -372,7 +424,7 @@ function useCompiledAgo(): string | null {
   return finishedAt ? formatRelative(new Date(finishedAt).toISOString()) : null;
 }
 
-function StatusBar() {
+function StatusBar({ onHistory }: { onHistory: () => void }) {
   const { cursor, saving, status, active, project } = useWorkspace();
   const words = useWordCount(active);
   const compiledAgo = useCompiledAgo();
@@ -390,6 +442,7 @@ function StatusBar() {
       {project?.mainDocument && <span className="min-w-0 truncate">Main: {project.mainDocument}</span>}
       {compiling ? <span>Compiling…</span> : compiledAgo && <span className="min-w-0 truncate" title="Last compile">Compiled {compiledAgo}</span>}
       <span className="ml-auto shrink-0">{langLabel}</span>
+      <HistoryStatusItem onOpen={onHistory} />
       {words !== null && (
         <button
           type="button"

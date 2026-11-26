@@ -4,7 +4,7 @@
 
 ![Texo: the LaTeX source on the left and the live PDF preview on the right](docs/screenshot.png)
 
-**[Download Texo 1.1 →](https://github.com/codewithdark-git/Texo/releases/latest)** for Windows and Linux.
+**[Download Texo 1.2 →](https://github.com/codewithdark-git/Texo/releases/latest)** for Windows and Linux.
 
 ## Why Texo
 
@@ -14,6 +14,7 @@
 - **Nothing else to install.** A LaTeX engine ([Tectonic](https://tectonic-typesetting.github.io)) ships with the app. If you already use MiKTeX or TeX Live, Texo uses that instead.
 - **Works offline.** After the first compile, which fetches the LaTeX packages a document needs, everything stays local. No account and no upload.
 - **Safe with other people's projects.** Downloaded projects can't run their own build scripts until you trust them.
+- **AI with your own key, and full history.** Optional AI help fixes and explains compile errors, reviews your paper and drafts responses to reviewers. Every change, yours or the AI's, is kept in a local history you can undo.
 
 ## Features
 
@@ -71,6 +72,23 @@
 - **Save PDF as…** copies the compiled PDF anywhere.
 - **Always a PDF in your project:** after each successful compile, Texo saves the PDF next to your main file (`main.tex` → `main.pdf`). It's one file, kept up to date, and a failed compile never replaces it. If you already have a file with that name, Texo leaves it alone.
 
+### AI and agents
+- **Bring your own key.** Texo ships no key and has no server: requests go from your computer to the service you choose. NVIDIA is the default and its key is free (build.nvidia.com); Claude, OpenRouter, Groq, Gemini and OpenAI-compatible services work too. Keys stay in your system's credential store.
+- **Explain & fix** in the Issues panel explains a compile error in plain words and offers a fix to check first.
+- The **AI panel** (Ctrl+Shift+A) has a **Chat** about your paper and an **Agents** tab. Agents work in the background, up to three at once:
+  - **Fixer:** edits and compiles a private copy until the paper compiles. Fixes that only hide an error are flagged.
+  - **Reviewer:** reviews like a venue's reviewers (NeurIPS, ICLR, ICML, ACL, CVPR, journals, thesis), with automatic checks, file:line for every weakness and an area-chair summary.
+  - **Response to reviewers:** splits the reviews into concerns, lets you approve a plan, then drafts `response-to-reviewers.tex` and the paper changes.
+  - **Task agent:** does what you describe, with files and pictures attached.
+- Agents and chat can look up papers (arXiv, Crossref, Semantic Scholar), fetch and check BibTeX, and read web pages. Web search works when you add a search service.
+- **Nothing changes until you accept it.** Each run ends with a side-by-side review of its changes, file by file or change by change.
+- Make your own agents in **Settings → AI → Agents**, and keep per-project notes the agents read in **Settings → AI → Memory**.
+
+### History
+- Texo saves a version of your project shortly after you edit, before every compile, before every AI run and when you close it. No git install is needed, and your own git repository is never touched.
+- The **History** tab lists versions by day, with AI runs grouped. Open any file as a diff, restore a file or the whole project, undo an AI run, and add labels like "Submitted".
+- Importing a `.zip` from an online editor and working in Texo gives you this full history locally.
+
 ### Shortcuts
 
 | Keys | Action |
@@ -81,6 +99,7 @@
 | Ctrl+, | Settings |
 | Ctrl+S | Save (Texo also saves automatically) |
 | Ctrl+Enter | Compile |
+| Ctrl+Shift+A | Show or hide the AI panel |
 | Ctrl+W / Ctrl+Tab | Close tab / next tab |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Editor zoom in / out / reset |
 | Ctrl+Alt+J | Show the cursor's position in the PDF |
@@ -126,7 +145,9 @@ My paper/
 ├── references.bib
 └── .texo/
     ├── project.json   # name, main document, engine
-    └── build/         # aux files, logs, SyncTeX data
+    ├── build/         # aux files, logs, SyncTeX data
+    ├── history/       # the project's version history
+    └── ai/            # agent runs, chats, memory and agent profiles
 ```
 
 The folder still works in any other LaTeX editor.
@@ -144,8 +165,8 @@ Texo is free and has no ads. If it helps you, use the **Support** button (in the
 
 ## Roadmap
 
-- **Next:** an AI writing assistant, version history with restore.
-- **Later:** Zotero, Beamer presentation mode, collaboration, Git sync, macOS.
+- **Next:** a test suite of real arXiv papers, Zotero.
+- **Later:** Beamer presentation mode, collaboration, Git sync, macOS.
 
 ## Development
 
@@ -196,6 +217,8 @@ Pushing a `v*` tag builds both platforms in CI and attaches the installers to th
 | `src/visual/view/` | Visual mode's editor view, toolbar, input rules and popovers |
 | `src/lib/templates.tsx` | The template gallery's catalogue and thumbnails |
 | `src/lib/api.ts` | Typed wrappers for the Rust commands |
+| `src/ai/` | AI panel, chat, agents, changeset review, review report, AI settings |
+| `src/history/` | The History tab and status bar item |
 | `src-tauri/src/project.rs` | Project folders: create, scan, rename, duplicate, saved PDF |
 | `src-tauri/src/fsops.rs` | File reads and writes, confined to the project |
 | `src-tauri/src/compile.rs` | Finds TeX tools and runs latexmk, the engine, or Tectonic |
@@ -205,6 +228,10 @@ Pushing a `v*` tag builds both platforms in CI and attaches the installers to th
 | `src-tauri/src/archive.rs` | Zip and tar.gz import and export |
 | `src-tauri/src/watcher.rs` | Notices file changes made outside Texo |
 | `src-tauri/src/symbols.rs` | Finds labels, citations, and commands for completions |
+| `src-tauri/src/ai/` | AI providers, keys, the tool-calling LLM layer, Explain & fix |
+| `src-tauri/src/agents/` | Agent runs, overlay, tools, kinds, profiles, memory, review checklist |
+| `src-tauri/src/chat/` | Chat conversations |
+| `src-tauri/src/history/` | Project history (libgit2, a private repository in `.texo/history`) |
 
 ## License
 

@@ -12,6 +12,8 @@ import {
   FileText,
   FolderOpen,
   FolderInput,
+  FolderSearch,
+  Info,
   LayoutGrid,
   List,
   MoreHorizontal,
@@ -22,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { api, errorText, type ProjectSummary, type Template } from "../lib/api";
+import { isMissing } from "../lib/openProject";
 import { TEMPLATES, TemplateThumb } from "../lib/templates";
 import { filterProjects, formatDate, formatRelative, sortProjects, type SortKey } from "../lib/projects";
 import { useApp } from "../store";
@@ -87,6 +90,16 @@ export function Dashboard() {
     if (path) await app.openFolder(path);
   };
 
+  // Opening a single .tex file opens the folder it's in and compiles that file.
+  const openTexFile = async () => {
+    const picked = await openDialog({
+      multiple: false,
+      title: "Open a .tex file",
+      filters: [{ name: "LaTeX document", extensions: ["tex"] }],
+    });
+    if (typeof picked === "string") await app.openFolder(picked);
+  };
+
   // Drop a project folder (or a .tex file inside one) on the window to open
   // it, or a .zip / .tar.gz to import it.
   const [dragging, setDragging] = useState(false);
@@ -103,17 +116,9 @@ export function Dashboard() {
           setDialog({ kind: "import", file: dropped });
           return;
         }
-        void (async () => {
-          const tryOpen = (path: string) => api.openFolder(path).catch(() => null);
-          // A dropped file opens the folder it's in.
-          const project = (await tryOpen(dropped)) ?? (await tryOpen(dropped.replace(/[\\/][^\\/]+$/, "")));
-          if (!project) {
-            toast("Drop a folder with your LaTeX files to open it as a project.", "error");
-            return;
-          }
-          await useApp.getState().refresh();
-          useApp.getState().open(project);
-        })();
+        // A folder opens as a project; a .tex file opens its folder and
+        // compiles that file. Anything else is explained by the backend.
+        void useApp.getState().openFolder(dropped);
       }
     });
     return () => void pending.then((off) => off());
@@ -149,39 +154,55 @@ export function Dashboard() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const actionsFor = (p: ProjectSummary) => [
-    { label: "Open", icon: <BookOpen size={15} />, onSelect: () => app.open(p) },
-    { label: "Rename", icon: <Pencil size={15} />, onSelect: () => setDialog({ kind: "rename", project: p }) },
-    { label: "Duplicate", icon: <Copy size={15} />, onSelect: () => void app.duplicate(p) },
-    {
-      label: `Show in ${fileManagerName}`,
-      icon: <FolderOpen size={15} />,
-      onSelect: () => void revealItemInDir(p.path),
-    },
-    {
-      label: "Export as .zip…",
-      icon: <FileDown size={15} />,
-      // Ask about the PDF only when there is one to include.
-      onSelect: () => (p.outputPdf ? setDialog({ kind: "export", project: p }) : void exportZip(p, false)),
-    },
-    "divider" as const,
-    ...(p.external
+  const actionsFor = (p: ProjectSummary): Parameters<typeof Menu>[0]["items"] =>
+    isMissing(p)
       ? [
           {
+            label: "Find folder…",
+            hint: "Show Texo where the project is now",
+            icon: <FolderSearch size={15} />,
+            onSelect: () => app.open(p),
+          },
+          {
             label: "Remove from list",
-            hint: "Keeps the folder on disk",
+            hint: "Doesn't delete any files",
             icon: <X size={15} />,
             onSelect: () => void app.forget(p),
           },
         ]
-      : []),
-    {
-      label: `Move to ${trashName}`,
-      icon: <Trash2 size={15} />,
-      danger: true,
-      onSelect: () => setDialog({ kind: "delete", project: p }),
-    },
-  ];
+      : [
+        { label: "Open", icon: <BookOpen size={15} />, onSelect: () => app.open(p) },
+        { label: "Rename", icon: <Pencil size={15} />, onSelect: () => setDialog({ kind: "rename", project: p }) },
+        { label: "Duplicate", icon: <Copy size={15} />, onSelect: () => void app.duplicate(p) },
+        {
+          label: `Show in ${fileManagerName}`,
+          icon: <FolderOpen size={15} />,
+          onSelect: () => void revealItemInDir(p.path),
+        },
+        {
+          label: "Export as .zip…",
+          icon: <FileDown size={15} />,
+          // Ask about the PDF only when there is one to include.
+          onSelect: () => (p.outputPdf ? setDialog({ kind: "export", project: p }) : void exportZip(p, false)),
+        },
+        "divider" as const,
+        ...(p.external
+          ? [
+              {
+                label: "Remove from list",
+                hint: "Keeps the folder on disk",
+                icon: <X size={15} />,
+                onSelect: () => void app.forget(p),
+              },
+            ]
+          : []),
+        {
+          label: `Move to ${trashName}`,
+          icon: <Trash2 size={15} />,
+          danger: true,
+          onSelect: () => setDialog({ kind: "delete", project: p }),
+        },
+        ];
 
   const newMenu = (
     <Menu
@@ -196,6 +217,12 @@ export function Dashboard() {
           hint: "Papers, thesis, slides, notes, letters and more (Ctrl+N)",
           icon: <FileText size={15} />,
           onSelect: () => openNewProject(),
+        },
+        {
+          label: "Open a .tex file…",
+          hint: "Opens the folder it's in and compiles that file",
+          icon: <FolderOpen size={15} />,
+          onSelect: () => void openTexFile(),
         },
         {
           label: "Import .zip or .tar.gz…",
@@ -255,6 +282,15 @@ export function Dashboard() {
           </div>
         </header>
 
+        {app.notice && (
+          <div role="status" className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm">
+            <Info size={15} className="mt-0.5 shrink-0 text-accent" />
+            <span className="flex-1">{app.notice}</span>
+            <button type="button" aria-label="Dismiss" onClick={app.dismissNotice} className="text-muted hover:text-text">
+              <X size={15} />
+            </button>
+          </div>
+        )}
         {app.error && (
           <div role="alert" className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2.5 text-sm">
             <span className="flex-1">{app.error}</span>
@@ -388,7 +424,7 @@ function ProjectTable({
             key={p.id + p.path}
             onDoubleClick={() => open(p)}
             onContextMenu={(e) => onContext(e, p)}
-            className="group border-b border-border/60 hover:bg-surface"
+            className={`group border-b border-border/60 hover:bg-surface ${isMissing(p) ? "opacity-60" : ""}`}
           >
             <td className="py-2 pl-2">
               <button type="button" onClick={() => open(p)} className="flex w-full min-w-0 items-center gap-3 text-left">
@@ -398,15 +434,19 @@ function ProjectTable({
                 <span className="min-w-0">
                   <span className="block truncate font-medium" title={p.name}>{p.name}</span>
                   <span className="block truncate text-xs text-muted" title={p.external ? p.path : undefined}>
-                    {p.external ? p.path : `${p.fileCount} ${p.fileCount === 1 ? "file" : "files"}`}
+                    {isMissing(p)
+                      ? `Folder not found · ${p.path}`
+                      : p.external
+                        ? p.path
+                        : `${p.fileCount} ${p.fileCount === 1 ? "file" : "files"}`}
                   </span>
                 </span>
               </button>
             </td>
-            <td className="text-muted" title={new Date(p.lastEdited).toLocaleString()}>
-              {formatRelative(p.lastEdited)}
+            <td className="text-muted" title={isMissing(p) ? undefined : new Date(p.lastEdited).toLocaleString()}>
+              {isMissing(p) ? "—" : formatRelative(p.lastEdited)}
             </td>
-            <td className="text-muted">{formatDate(p.createdAt)}</td>
+            <td className="text-muted">{isMissing(p) ? "—" : formatDate(p.createdAt)}</td>
             <td className="pr-2 text-right">
               <RowMenu project={p} actionsFor={actionsFor} />
             </td>
@@ -433,7 +473,7 @@ function ProjectGrid({
         <div
           key={p.id + p.path}
           onContextMenu={(e) => onContext(e, p)}
-          className="group rounded-xl border border-border bg-surface transition-colors hover:border-accent/60"
+          className={`group rounded-xl border border-border bg-surface transition-colors hover:border-accent/60 ${isMissing(p) ? "opacity-60" : ""}`}
         >
           <button
             type="button"
@@ -457,7 +497,9 @@ function ProjectGrid({
           <div className="flex items-center gap-2 px-3 py-2.5">
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium" title={p.name}>{p.name}</div>
-              <div className="text-xs text-muted">Edited {formatRelative(p.lastEdited)}</div>
+              <div className="text-xs text-muted">
+                {isMissing(p) ? "Folder not found" : `Edited ${formatRelative(p.lastEdited)}`}
+              </div>
             </div>
             <RowMenu project={p} actionsFor={actionsFor} />
           </div>

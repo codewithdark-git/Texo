@@ -56,8 +56,16 @@ jobs:
       - name: Fetch the bundled LaTeX engine
         run: pnpm fetch-engine
 
-      - name: Typecheck and run all tests
-        run: pnpm check
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Frontend tests
+        timeout-minutes: 15
+        run: pnpm test
+
+      - name: Rust tests
+        timeout-minutes: 40
+        run: pnpm test:rust
 
       - name: Build installers
         run: pnpm tauri build --bundles ${{ matrix.bundles }}

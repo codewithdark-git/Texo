@@ -21,12 +21,28 @@ type Shared<'a> = State<'a, Mutex<AppState>>;
 
 fn lock<'a>(state: &'a Shared<'_>) -> std::sync::MutexGuard<'a, AppState> {
     // A panic in another command shouldn't lock the user out of the app.
-    state.lock().unwrap_or_else(|e| e.into_inner())
+    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+    // Another Texo window may have saved settings since (a project opened
+    // there, a compiler change); a cheap file-time check picks that up.
+    let s = &mut *guard;
+    s.settings_file.refresh(&mut s.settings);
+    guard
+}
+
+/// Saves one change to the settings. The change is applied to what is on
+/// disk right now (another Texo window may have changed it), never to this
+/// window's possibly outdated copy. `change` returns false when there was
+/// nothing to do.
+fn update_settings(s: &mut AppState, change: impl FnOnce(&mut Settings) -> bool) -> AppResult<()> {
+    let notice = s.settings.notice.take();
+    s.settings = s.settings_file.update(change)?;
+    s.settings.notice = s.settings.notice.take().or(notice);
+    Ok(())
 }
 
 /// Only act on folders Texo already knows about, so a bad path from the UI
 /// can never rename or delete an arbitrary folder.
-fn known_project(state: &AppState, path: &str) -> AppResult<(PathBuf, bool)> {
+pub(crate) fn known_project(state: &AppState, path: &str) -> AppResult<(PathBuf, bool)> {
     let dir = PathBuf::from(path);
     let in_root = dir
         .parent()
@@ -36,15 +52,29 @@ fn known_project(state: &AppState, path: &str) -> AppResult<(PathBuf, bool)> {
         .external_projects
         .iter()
         .any(|p| project::same_path(p, &dir));
-    if !(in_root || external) || project::read_meta(&dir).is_none() {
+    if !(in_root || external) {
         return Err(AppError::msg("That folder isn't a Texo project."));
+    }
+    if !dir.is_dir() {
+        return Err(AppError::msg(
+            "This project's folder can't be found. It may have been moved, renamed or deleted, or it's on a drive that isn't connected.",
+        ));
+    }
+    if project::read_meta(&dir).is_none() {
+        return Err(AppError::msg(
+            "Texo's project info in this folder is missing or damaged. Open the folder again from the dashboard with “Open folder” to set it up.",
+        ));
     }
     Ok((dir, external && !in_root))
 }
 
 #[tauri::command]
 pub async fn get_settings(state: Shared<'_>) -> AppResult<Settings> {
-    Ok(lock(&state).settings.clone())
+    let mut s = lock(&state);
+    let settings = s.settings.clone();
+    // A notice about the settings file is shown once.
+    s.settings.notice = None;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -52,8 +82,10 @@ pub async fn set_projects_root(state: Shared<'_>, path: String) -> AppResult<Set
     let root = PathBuf::from(path);
     std::fs::create_dir_all(&root)?;
     let mut s = lock(&state);
-    s.settings.projects_root = root;
-    s.settings.save(&s.settings_path)?;
+    update_settings(&mut s, |st| {
+        st.projects_root = root;
+        true
+    })?;
     Ok(s.settings.clone())
 }
 
@@ -72,39 +104,51 @@ pub async fn create_project(
     let mut s = lock(&state);
     std::fs::create_dir_all(&s.settings.projects_root)?;
     let created = project::create(&s.settings.projects_root, &name, template)?;
-    s.settings.trusted_projects.push(PathBuf::from(&created.path));
-    s.settings.save(&s.settings_path)?;
+    let dir = PathBuf::from(&created.path);
+    update_settings(&mut s, |st| st.add_trusted(&dir))?;
     Ok(created)
 }
 
-/// Opens any folder as a project. Folders outside the projects folder are
-/// remembered so they show up on the dashboard.
+/// Opens a folder, or the folder of a `.tex` file, as a project. Folders
+/// outside the projects folder are remembered so they show up on the
+/// dashboard; opening one again always re-registers it, even if another
+/// Texo window dropped it from the list.
 #[tauri::command]
 pub async fn open_folder(state: Shared<'_>, path: String) -> AppResult<ProjectSummary> {
-    let dir = PathBuf::from(path);
-    if !dir.is_dir() {
-        return Err(AppError::msg("That folder doesn't exist."));
-    }
-    let mut s = lock(&state);
-    if project::same_path(&dir, &s.settings.projects_root) {
+    let (dir, file) = project::resolve_open_target(Path::new(&path), dirs::home_dir().as_deref())?;
+    let root = lock(&state).settings.projects_root.clone();
+    if project::same_path(&dir, &root) {
         return Err(AppError::msg(
             "That's your projects folder. Pick one of the project folders inside it.",
         ));
     }
-    project::ensure_meta(&dir)?;
-    let in_root = dir
-        .parent()
-        .is_some_and(|p| project::same_path(p, &s.settings.projects_root));
-    let known = s
-        .settings
-        .external_projects
-        .iter()
-        .any(|p| project::same_path(p, &dir));
-    if !in_root && !known {
-        s.settings.external_projects.push(dir.clone());
-        s.settings.save(&s.settings_path)?;
+    let in_root = dir.parent().is_some_and(|p| project::same_path(p, &root));
+    // Scanning a big folder takes a moment; don't hold up other commands.
+    let scan_dir = dir.clone();
+    let opened = tauri::async_runtime::spawn_blocking(move || project::open(&scan_dir, file.as_deref(), !in_root))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))??;
+    if !in_root {
+        // Checked against the file on disk, not this window's copy.
+        update_settings(&mut lock(&state), |st| st.add_external(&dir))?;
     }
-    project::summarize(&dir, !in_root).ok_or_else(|| AppError::msg("Couldn't read that project."))
+    Ok(opened)
+}
+
+/// Copies a folder Texo can't write to (read-only, or on a locked drive)
+/// into the projects folder as a new project. The UI asks first.
+#[tauri::command]
+pub async fn copy_folder_to_projects(state: Shared<'_>, path: String) -> AppResult<ProjectSummary> {
+    let root = lock(&state).settings.projects_root.clone();
+    // The same checks as opening (never a whole drive or the home folder);
+    // a .tex file copies its folder and keeps that file as the main one.
+    let (src, file) = project::resolve_open_target(Path::new(&path), dirs::home_dir().as_deref())?;
+    if project::same_path(&src, &root) || root.starts_with(&src) {
+        return Err(AppError::msg("That folder holds your projects folder, so Texo can't copy it into itself."));
+    }
+    tauri::async_runtime::spawn_blocking(move || project::copy_into(&src, file.as_deref(), &root))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))?
 }
 
 #[tauri::command]
@@ -147,10 +191,7 @@ pub async fn forget_project(state: Shared<'_>, path: String) -> AppResult<()> {
 }
 
 fn forget(s: &mut AppState, dir: &Path) -> AppResult<()> {
-    s.settings
-        .external_projects
-        .retain(|p| !project::same_path(p, dir));
-    s.settings.save(&s.settings_path)
+    update_settings(s, |st| st.remove_external(dir))
 }
 
 #[tauri::command]
@@ -187,7 +228,10 @@ pub async fn write_file(
     content: String,
 ) -> AppResult<()> {
     let dir = known_project(&lock(&state), &path)?.0;
-    fsops::write(&dir, &file, &content)
+    fsops::write(&dir, &file, &content)?;
+    // History snapshot 30 s after the last save (background, never fails the save).
+    crate::history::auto::note_save(&dir);
+    Ok(())
 }
 
 #[tauri::command]
@@ -247,6 +291,9 @@ pub async fn watch_project(app: AppHandle, state: Shared<'_>, path: String) -> A
     if s.watcher.as_ref().is_some_and(|w| project::same_path(&w.root, &dir)) {
         return Ok(());
     }
+    if let Some(old) = s.watcher.as_ref() {
+        crate::history::auto::flush(&old.root);
+    }
     s.watcher = None;
     s.watcher = Some(watcher::watch(app, dir)?);
     Ok(())
@@ -254,7 +301,10 @@ pub async fn watch_project(app: AppHandle, state: Shared<'_>, path: String) -> A
 
 #[tauri::command]
 pub async fn unwatch_project(state: Shared<'_>) -> AppResult<()> {
-    lock(&state).watcher = None;
+    // The project is closing: snapshot it in the background.
+    if let Some(old) = lock(&state).watcher.take() {
+        crate::history::auto::flush(&old.root);
+    }
     Ok(())
 }
 
@@ -269,8 +319,11 @@ pub async fn detect_toolchains(state: Shared<'_>) -> AppResult<Toolchains> {
 #[tauri::command]
 pub async fn set_compiler(state: Shared<'_>, compiler: Compiler) -> AppResult<Settings> {
     let mut s = lock(&state);
-    s.settings.compiler = compiler;
-    s.settings.save(&s.settings_path)?;
+    update_settings(&mut s, |st| {
+        let changed = st.compiler != compiler;
+        st.compiler = compiler;
+        changed
+    })?;
     Ok(s.settings.clone())
 }
 
@@ -297,7 +350,8 @@ pub async fn compile_project(
         let trusted = is_trusted(&s, &dir);
         (dir, s.settings.compiler, s.tools_dir.clone(), trusted)
     };
-    let meta = project::ensure_meta(&dir)?;
+    // The main document may have been renamed or deleted outside Texo.
+    let (meta, main_note) = project::repair_main_document(&dir)?;
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut map = running.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -323,6 +377,12 @@ pub async fn compile_project(
                 compile::OutputChunk { project: project.clone(), lines },
             );
         };
+        // History: snapshot the user's files on a side thread while TeX runs
+        // (best effort; it never fails or delays the compile beyond a few s).
+        let snap_dir = dir.clone();
+        let snapshot = std::thread::spawn(move || {
+            crate::history::snapshot_quietly(&snap_dir, crate::history::Reason::BeforeCompile)
+        });
         let mut result = compile::compile(&compile::Job {
             root: &dir,
             main: &main,
@@ -343,11 +403,19 @@ pub async fn compile_project(
                 }
             }
         }
+        let snap = snapshot.join().ok().flatten();
+        if result.status == compile::Status::Success {
+            crate::history::mark_compiled_ok_quietly(&dir, snap.as_deref());
+        }
         result
     })
     .await
     .map_err(|e| AppError::msg(e.to_string()))?;
 
+    let mut result = result;
+    if let Some(note) = main_note {
+        result.hints.insert(0, note);
+    }
     let mut map = running.0.lock().unwrap_or_else(|e| e.into_inner());
     if map.get(&path).is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
         map.remove(&path);
@@ -380,11 +448,7 @@ fn is_trusted(s: &AppState, dir: &Path) -> bool {
 pub async fn trust_project(state: Shared<'_>, path: String) -> AppResult<()> {
     let mut s = lock(&state);
     let dir = known_project(&s, &path)?.0;
-    if !is_trusted(&s, &dir) {
-        s.settings.trusted_projects.push(dir);
-        s.settings.save(&s.settings_path)?;
-    }
-    Ok(())
+    update_settings(&mut s, |st| st.add_trusted(&dir))
 }
 
 #[tauri::command]

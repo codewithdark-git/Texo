@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Dashboard } from "./components/Dashboard";
 import { GlobalDialogs } from "./components/GlobalDialogs";
+import { OpenFlowDialogs } from "./components/OpenFlowDialogs";
 import { Toaster } from "./components/Toaster";
 import { useApp } from "./store";
 
@@ -31,6 +32,7 @@ export default function App() {
         <Dashboard />
       )}
       <GlobalDialogs />
+      <OpenFlowDialogs />
       <Toaster />
     </>
   );

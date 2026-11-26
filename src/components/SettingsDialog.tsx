@@ -1,8 +1,9 @@
-// Settings (Ctrl+,): appearance, editor, compiling, files, projects, and
+// Settings (Ctrl+,): appearance, editor, compiling, the AI helper, files, projects, and
 // About, as sections listed on the left. Every change applies at once.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { FolderCog, Hammer, Heart, Info, Library, Minus, Palette, Plus, RefreshCw, Type, Files } from "lucide-react";
+import { FolderCog, Hammer, Heart, Info, Library, Minus, Palette, Plus, RefreshCw, Sparkles, Type, Files } from "lucide-react";
+import { AiSettingsSection } from "../ai/AiSettingsSection";
 import { api, errorText, type Compiler, type Toolchains } from "../lib/api";
 import { getEditorPrefs, onEditorPrefs, setEditorPrefs, type EditorPrefs } from "../lib/editorPrefs";
 import { getShowHidden, setShowHidden } from "../lib/hiddenFiles";
@@ -11,14 +12,16 @@ import { useApp } from "../store";
 import { toast, useUi } from "../ui";
 import { useCompile } from "../workspace/compileStore";
 import { Button, Modal } from "./Dialog";
+import { Choice, Heading, Row, Toggle } from "./settingsControls";
 import { changeProjectsRoot, Logo } from "./Sidebar";
 
-type Section = "appearance" | "editor" | "compile" | "files" | "projects" | "about";
+type Section = "appearance" | "editor" | "compile" | "ai" | "files" | "projects" | "about";
 
 const SECTIONS: [Section, string, typeof Palette][] = [
   ["appearance", "Appearance", Palette],
   ["editor", "Editor", Type],
   ["compile", "Compile", Hammer],
+  ["ai", "AI", Sparkles],
   ["files", "Files", Files],
   ["projects", "Projects", Library],
   ["about", "About", Info],
@@ -26,60 +29,6 @@ const SECTIONS: [Section, string, typeof Palette][] = [
 
 const FONT_MIN = 9;
 const FONT_MAX = 32;
-
-/** One labelled setting: the name and help on the left, the control on the right. */
-function Row({ label, help, children }: { label: string; help?: string; children: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 py-2.5">
-      <div className="min-w-0">
-        <div className="text-sm">{label}</div>
-        {help && <div className="mt-0.5 text-xs text-muted">{help}</div>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (on: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-label={label}
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className={`relative h-5 w-9 rounded-full transition ${checked ? "bg-accent" : "bg-surface-2 ring-1 ring-border"}`}
-    >
-      <span
-        className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : ""}`}
-      />
-    </button>
-  );
-}
-
-/** A small segmented control. */
-function Choice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) {
-  return (
-    <div role="radiogroup" aria-label={label} className="flex rounded-lg border border-border bg-surface-2/50 p-0.5">
-      {options.map(([v, name]) => (
-        <button
-          key={v}
-          type="button"
-          role="radio"
-          aria-checked={value === v}
-          onClick={() => onChange(v)}
-          className={`rounded-md px-2.5 py-1 text-xs ${value === v ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text"}`}
-        >
-          {name}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Heading({ children }: { children: ReactNode }) {
-  return <h3 className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">{children}</h3>;
-}
 
 function AppearanceSection() {
   const [pref, setPref] = useState<ThemePref>(getThemePref);
@@ -352,7 +301,10 @@ function AboutSection() {
 }
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
-  const [section, setSection] = useState<Section>("appearance");
+  const [section, setSection] = useState<Section>(() => {
+    const wanted = useUi.getState().settingsSection;
+    return SECTIONS.some(([s]) => s === wanted) ? (wanted as Section) : "appearance";
+  });
   return (
     <Modal title="Settings" onClose={onClose} wide>
       <div className="flex h-[min(60vh,480px)] gap-4">
@@ -375,6 +327,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {section === "appearance" && <AppearanceSection />}
           {section === "editor" && <EditorSection />}
           {section === "compile" && <CompileSection />}
+          {section === "ai" && <AiSettingsSection />}
           {section === "files" && <FilesSection />}
           {section === "projects" && <ProjectsSection />}
           {section === "about" && <AboutSection />}

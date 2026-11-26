@@ -9,6 +9,7 @@ import {
   type Settings,
   type Template,
 } from "./lib/api";
+import { copyFolderToProjects, isMissing, needsMainChoice, readOnlyMessage } from "./lib/openProject";
 import type { SortDir, SortKey } from "./lib/projects";
 import { toast, trashName } from "./ui";
 
@@ -33,6 +34,15 @@ async function compileOnceOpened(path: string) {
 }
 
 export type ViewMode = "list" | "grid";
+
+/** A question the open flow needs answered (rendered by OpenFlowDialogs). */
+export type OpenPrompt =
+  /** Texo can't write its files there; offer an editable copy. */
+  | { kind: "readOnly"; path: string; message: string }
+  /** Several files could be the main document; let the user pick in one click. */
+  | { kind: "chooseMain"; project: ProjectSummary }
+  /** A listed folder can't be found; offer to find it or remove it from the list. */
+  | { kind: "missing"; project: ProjectSummary };
 
 interface Prefs {
   viewMode: ViewMode;
@@ -69,6 +79,9 @@ interface AppStore extends Prefs {
   engine: EngineStatus | null;
   /** First-run engine setup: running, with its latest progress line. */
   engineSetup: { running: boolean; line: string; error: string | null };
+  /** Something calm to tell the user (not an error), e.g. settings restored. */
+  notice: string | null;
+  openPrompt: OpenPrompt | null;
 
   load: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -76,11 +89,19 @@ interface AppStore extends Prefs {
   setViewMode: (mode: ViewMode) => void;
   setSort: (key: SortKey) => void;
   dismissError: () => void;
+  dismissNotice: () => void;
+  closeOpenPrompt: () => void;
+  /** Opens a project; a missing folder asks what to do instead. */
   open: (project: ProjectSummary | null) => void;
 
   /** Creates a project from a template and opens it; false if it failed. */
   createProject: (name: string, template: Template) => Promise<boolean>;
-  openFolder: (path: string) => Promise<void>;
+  /** Opens a folder or a .tex file; true if a project opened. */
+  openFolder: (path: string) => Promise<boolean>;
+  /** Copies a read-only folder into the projects folder and opens the copy. */
+  copyToProjects: (path: string) => Promise<void>;
+  /** Re-points a missing project at the folder the user found. */
+  relocate: (missing: ProjectSummary, path: string) => Promise<void>;
   /** Imports a .zip or .tar.gz as a new project and opens it. */
   importProject: (archivePath: string, name: string, main: string | null) => Promise<boolean>;
   rename: (project: ProjectSummary, name: string) => Promise<void>;
@@ -120,6 +141,8 @@ export const useApp = create<AppStore>((set, get) => {
     openProject: null,
     engine: null,
     engineSetup: { running: false, line: "", error: null },
+    notice: null,
+    openPrompt: null,
 
     checkEngine: async () => {
       try {
@@ -153,7 +176,7 @@ export const useApp = create<AppStore>((set, get) => {
     load: async () => {
       try {
         const settings = await api.getSettings();
-        set({ settings });
+        set({ settings, notice: settings.notice ?? null });
         await get().refresh();
         void get().checkEngine();
       } catch (err) {
@@ -179,7 +202,14 @@ export const useApp = create<AppStore>((set, get) => {
       }
     },
     dismissError: () => set({ error: null }),
-    open: (openProject) => set({ openProject }),
+    dismissNotice: () => set({ notice: null }),
+    closeOpenPrompt: () => set({ openPrompt: null }),
+    open: (openProject) => {
+      if (openProject && isMissing(openProject)) set({ openPrompt: { kind: "missing", project: openProject } });
+      // No readable project info: open the folder again, which sets it up.
+      else if (openProject?.needsSetup) void get().openFolder(openProject.path);
+      else set({ openProject });
+    },
 
     createProject: async (name, template) => {
       const created = await act(() => api.createProject(name, template));
@@ -188,8 +218,37 @@ export const useApp = create<AppStore>((set, get) => {
       return true;
     },
     openFolder: async (path) => {
-      const opened = await act(() => api.openFolder(path));
-      if (opened) set({ openProject: opened });
+      let opened: ProjectSummary;
+      try {
+        opened = await api.openFolder(path);
+      } catch (err) {
+        const text = errorText(err);
+        const readOnly = readOnlyMessage(text);
+        if (readOnly) set({ openPrompt: { kind: "readOnly", path, message: readOnly } });
+        else set({ error: text });
+        return false;
+      }
+      await get().refresh().catch(() => {});
+      set({ openProject: opened, error: null });
+      for (const notice of opened.notices ?? []) toast(notice, "info");
+      if (needsMainChoice(opened)) set({ openPrompt: { kind: "chooseMain", project: opened } });
+      return true;
+    },
+    copyToProjects: async (path) => {
+      const copy = await act(() => copyFolderToProjects(path));
+      if (!copy) return;
+      set({ openProject: copy });
+      toast(`Made an editable copy, “${copy.name}”, in your projects folder`);
+      if (needsMainChoice(copy)) set({ openPrompt: { kind: "chooseMain", project: copy } });
+    },
+    relocate: async (missing, path) => {
+      if (!(await get().openFolder(path))) return;
+      const found = get().openProject;
+      // The old entry points nowhere now; drop it unless it's the same place.
+      if (found && found.path !== missing.path) {
+        await api.forgetProject(missing.path).catch(() => {});
+        await get().refresh().catch(() => {});
+      }
     },
     importProject: async (archivePath, name, main) => {
       const imported = await act(() => api.importArchive(archivePath, name, main));
