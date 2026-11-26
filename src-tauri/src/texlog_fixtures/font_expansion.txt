@@ -1,0 +1,204 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (MiKTeX 26.5 NEXT) (preloaded format=pdflatex 2026.9.24)  24 NOV 2026 12:00
+entering extended mode
+ restricted \write18 enabled.
+ file:line:error style messages enabled.
+ %&-line parsing enabled.
+**./main.tex
+(main.tex
+LaTeX2e <2026-06-01>
+L3 programming layer <2026-08-10>
+{./empty.map}
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/base\article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/base\size10.clo
+File: size10.clo 2025/01/22 v1.4n Standard LaTeX file (size option)
+)
+\c@part=\count276
+\c@section=\count277
+\c@subsection=\count278
+\c@subsubsection=\count279
+\c@paragraph=\count280
+\c@subparagraph=\count281
+\c@figure=\count282
+\c@table=\count283
+\abovecaptionskip=\skip49
+\belowcaptionskip=\skip50
+\bibindent=\dimen150
+)
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/base\fontenc.sty
+Package: fontenc 2025/07/18 v2.1d Standard LaTeX package
+)
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/microtype\microtype.sty
+Package: microtype 2026/03/01 v3.2d Micro-typographical refinements (RS)
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/graphics\keyval.sty
+Package: keyval 2026-05-17 v1.15 key=value parser (DPC)
+\KV@toks@=\toks17
+)
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/etoolbox\etoolbox.sty
+Package: etoolbox 2025/10/02 v2.5m e-TeX tools for LaTeX (JAW)
+\etb@tempcnta=\count284
+)
+\MT@toks=\toks18
+\MT@tempbox=\box53
+\MT@count=\count285
+LaTeX Info: Redefining \noprotrusionifhmode on input line 1084.
+LaTeX Info: Redefining \leftprotrusion on input line 1085.
+\MT@prot@toks=\toks19
+LaTeX Info: Redefining \rightprotrusion on input line 1104.
+LaTeX Info: Redefining \textls on input line 1449.
+\MT@outer@kern=\dimen151
+LaTeX Info: Redefining \microtypecontext on input line 2053.
+LaTeX Info: Redefining \textmicrotypecontext on input line 2070.
+\MT@listname@count=\count286
+
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/microtype\microtype-pdf
+tex.def
+File: microtype-pdftex.def 2026/03/01 v3.2d Definitions specific to pdftex (RS)
+
+LaTeX Info: Redefining \lsstyle on input line 944.
+LaTeX Info: Redefining \lslig on input line 944.
+\MT@outer@space=\skip51
+)
+Package microtype Info: Loading configuration file microtype.cfg.
+
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/microtype\microtype.cfg
+File: microtype.cfg 2026/03/01 v3.2d microtype main configuration file (RS)
+)
+LaTeX Info: Redefining \microtypesetup on input line 3065.
+)
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/l3kernel\l3backend-pdft
+ex.def
+File: l3backend-pdftex.def 2026-08-10 L3 backend support: PDF output (pdfTeX)
+\l__color_backend_stack_int=\count287
+)
+No file main.aux.
+\openout1 = `main.aux'.
+
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 5.
+LaTeX Font Info:    ... okay on input line 5.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 5.
+LaTeX Font Info:    ... okay on input line 5.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 5.
+LaTeX Font Info:    ... okay on input line 5.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 5.
+LaTeX Font Info:    ... okay on input line 5.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 5.
+LaTeX Font Info:    ... okay on input line 5.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 5.
+LaTeX Font Info:    ... okay on input line 5.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 5.
+LaTeX Font Info:    ... okay on input line 5.
+LaTeX Info: Redefining \microtypecontext on input line 5.
+Package microtype Info: Applying patch `item' on input line 5.
+Package microtype Info: Applying patch `toc' on input line 5.
+Package microtype Info: Applying patch `eqnum' on input line 5.
+Package microtype Info: Applying patch `footnote' on input line 5.
+Package microtype Info: Applying patch `verbatim' on input line 5.
+LaTeX Info: Redefining \microtypesetup on input line 5.
+Package microtype Info: Generating PDF output.
+Package microtype Info: Character protrusion enabled (level 2).
+Package microtype Info: Using default protrusion set `alltext'.
+Package microtype Info: Automatic font expansion enabled (level 2),
+(microtype)             stretch: 20, shrink: 20, step: 1, non-selected.
+Package microtype Info: Using default expansion set `alltext-nott'.
+Package microtype Info: Patching command `\showhyphens'.
+Package microtype Info: No adjustment of tracking.
+Package microtype Info: No adjustment of interword spacing.
+Package microtype Info: No adjustment of character kerning.
+(C:\Users\user1\AppData\Local\Programs\MiKTeX\tex/latex/microtype\mt-cmr.cfg
+File: mt-cmr.cfg 2013/05/19 v2.2 microtype config. file: Computer Modern Roman 
+(RS)
+)
+
+LaTeX Warning: Citation `ref1' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref2' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref3' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref4' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref5' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref6' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref7' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref8' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref9' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref10' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref11' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref12' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref13' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref14' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref15' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref16' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref17' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref18' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref19' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref20' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref21' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref22' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Citation `ref23' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Reference `fig:one' on page 1 undefined on input line 10.
+
+No file main.bbl.
+[1
+
+
+main.tex:13: pdfTeX error (font expansion): auto expansion is only possible wit
+h scalable fonts.
+<argument> ...shipout:D \box_use:N \l_shipout_box 
+                                                  \__shipout_drop_firstpage_...
+l.13 \end{document}
+                   
+
+ 
+Here is how much of TeX's memory you used:
+ 2914 strings out of 467441
+ 48754 string characters out of 5407591
+ 503278 words of memory out of 5000000
+ 32267 multiletter control sequences out of 15000+600000
+ 629692 words of font info for 49 fonts, out of 8000000 for 9000
+ 1141 hyphenation exceptions out of 8191
+ 42i,5n,53p,1422b,142s stack positions out of 10000i,1000n,20000p,200000b,200000s
+main.tex:13:  ==> Fatal error occurred, no output PDF file produced!
