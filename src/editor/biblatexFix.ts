@@ -3,10 +3,15 @@
 // gets built, so every \cite comes out undefined. BibTeX ships with every TeX
 // install. Pure text helpers; CompilePanel applies the edit to the model.
 
-/** A compile hint split into an optional fix id (`[fix:id] ...`) and the sentence to show. */
-export function parseHint(hint: string): { fix: string | null; text: string } {
-  const m = /^\[fix:([a-z0-9-]+)\]\s*/i.exec(hint);
-  return m ? { fix: m[1], text: hint.slice(m[0].length) } : { fix: null, text: hint };
+/**
+ * A compile hint split into an optional fix id (`[fix:id] ...`), the fix's
+ * argument when it has one (`[fix:install-package:cm-super] ...` gives
+ * `arg: "cm-super"`), and the sentence to show.
+ */
+export function parseHint(hint: string): { fix: string | null; arg?: string; text: string } {
+  const m = /^\[fix:([a-z0-9-]+)(?::([A-Za-z0-9._-]+))?\]\s*/i.exec(hint);
+  if (!m) return { fix: null, text: hint };
+  return m[2] ? { fix: m[1], arg: m[2], text: hint.slice(m[0].length) } : { fix: m[1], text: hint.slice(m[0].length) };
 }
 
 /** A replacement of `text.slice(start, end)`. */

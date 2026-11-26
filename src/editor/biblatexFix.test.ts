@@ -12,6 +12,12 @@ describe("parseHint", () => {
     expect(parseHint("[fix:biblatex-bibtex] Biber isn't installed.")).toEqual({ fix: "biblatex-bibtex", text: "Biber isn't installed." });
     expect(parseHint("Just a tip.")).toEqual({ fix: null, text: "Just a tip." });
   });
+
+  it("reads a fix argument such as the package to install", () => {
+    expect(parseHint("[fix:install-package:cm-super] TeX stopped.")).toEqual({ fix: "install-package", arg: "cm-super", text: "TeX stopped." });
+    // Anything that isn't a plain package name stays in the text.
+    expect(parseHint("[fix:install-package:a b] x").fix).toBeNull();
+  });
 });
 
 describe("bibtexBackendEdit", () => {
