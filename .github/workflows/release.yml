@@ -67,6 +67,7 @@ jobs:
 
       # The tests include the guard that keeps the Support button in every release.
       - name: Type-check and test
+        timeout-minutes: 15
         run: pnpm typecheck && pnpm test
 
       - name: Fetch the bundled LaTeX engine
