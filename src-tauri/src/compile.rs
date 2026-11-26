@@ -321,14 +321,40 @@ pub(crate) fn kill_tree(pid: u32) {
 
 /// Each tool runs in its own process group (see `run`), so killing the group
 /// stops everything it started.
-#[cfg(not(windows))]
+///
+/// The signal goes straight to the group with `kill(2)`. Running the `kill`
+/// program instead could end up signalling Texo's own group (seen on Ubuntu
+/// CI, where it took down the test runner), so the target is checked first:
+/// never group 0 or 1, never our own group.
+#[cfg(unix)]
 pub(crate) fn kill_tree(pid: u32) {
-    let _ = Command::new("kill")
-        .args(["-KILL", &format!("-{pid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    if let Some(pgid) = safe_group(pid) {
+        // SAFETY: plain libc call; `pgid` is a positive id other than ours.
+        unsafe { sys::kill(-pgid, sys::SIGKILL) };
+    }
 }
+
+/// The process group to signal for a tool started with `process_group(0)`
+/// (its pid is its group id), or `None` when signalling it could hit Texo.
+#[cfg(unix)]
+fn safe_group(pid: u32) -> Option<i32> {
+    let pgid = i32::try_from(pid).ok().filter(|p| *p > 1)?;
+    // SAFETY: getpgrp has no preconditions.
+    let own = unsafe { sys::getpgrp() };
+    (pgid != own && pgid != std::process::id() as i32).then_some(pgid)
+}
+
+#[cfg(unix)]
+mod sys {
+    pub const SIGKILL: i32 = 9;
+    extern "C" {
+        pub fn kill(pid: i32, sig: i32) -> i32;
+        pub fn getpgrp() -> i32;
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+pub(crate) fn kill_tree(_pid: u32) {}
 
 fn run(
     program: &Path,
@@ -972,6 +998,35 @@ pub fn compile(job: &Job) -> CompileResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_tree_never_targets_texo_itself() {
+        assert_eq!(safe_group(0), None);
+        assert_eq!(safe_group(1), None);
+        assert_eq!(safe_group(std::process::id()), None);
+        // SAFETY: getpgrp has no preconditions.
+        let own = unsafe { sys::getpgrp() } as u32;
+        assert_eq!(safe_group(own), None);
+        assert_eq!(safe_group(u32::MAX), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_tree_stops_a_tool_and_what_it_started() {
+        use std::os::unix::process::CommandExt;
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "sleep 60 & sleep 60"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        kill_tree(child.id());
+        let started = Instant::now();
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn a_run_that_stopped_early_never_counts_as_success() {
