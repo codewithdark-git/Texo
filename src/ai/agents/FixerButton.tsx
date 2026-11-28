@@ -1,32 +1,56 @@
-// "Let the fixer agent handle it": next to the quick "Explain & fix" in the
-// Issues panel. Starts a fixer run in the background (it compiles a private
-// copy, fixes, checks again) and shows it in the AI panel's Agents tab.
+// The fixer agent's side of the Issues panel's "Fix issues" button: starting
+// a fixer run (it compiles a private copy, fixes, checks again, and you review
+// its changes), finding the run that is at work now, and the progress chip
+// that stands in for the button while it runs and leads to its card.
 
-import { useEffect, useState } from "react";
-import { Bot } from "lucide-react";
-import { useAiSettings } from "../aiPrefs";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ProgressRing } from "../../components/ui/ProgressRing";
+import { Tooltip } from "../../components/ui/Tooltip";
+import { useAiPanel } from "../panel/aiPanelStore";
+import { activeFixerRun } from "../fixIssues";
 import { startFixerRun } from "./actions";
+import { useRunFocus } from "./focusStore";
+import { listenRunEvents, runsForProject, useRuns } from "./runsStore";
 
-export function FixerAgentButton() {
-  const enabled = useAiSettings((s) => s.settings.enabled);
-  const loaded = useAiSettings((s) => s.loaded);
+/** Starts a fixer run; `busy` is true until it has started (or failed to). */
+export function useStartFixer(): { busy: boolean; start: () => void } {
   const [busy, setBusy] = useState(false);
+  const start = useCallback(() => {
+    setBusy(true);
+    void startFixerRun().finally(() => setBusy(false));
+  }, []);
+  return { busy, start };
+}
+
+/** The project's fixer run that is at work now, kept live from the agent events. */
+export function useActiveFixer(project: string | null) {
+  const runs = useRuns((s) => s.runs);
+  useEffect(() => listenRunEvents(), []);
   useEffect(() => {
-    if (!loaded) void useAiSettings.getState().load();
-  }, [loaded]);
-  if (!enabled) return null;
+    if (project && useRuns.getState().project !== project) void useRuns.getState().load(project);
+  }, [project]);
+  return useMemo(() => (project ? activeFixerRun(runsForProject(runs, project)) : null), [runs, project]);
+}
+
+/** Brings a run's card into view in the AI panel's Agents tab. */
+export function focusRun(runId: string) {
+  useAiPanel.getState().show("agents");
+  useRunFocus.getState().focus(runId);
+}
+
+/** "Fixing… round 2 of 3" with a ring; a click shows the run. */
+export function FixerProgressChip({ label, value, onClick }: { label: string; value: number | undefined; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={() => {
-        setBusy(true);
-        void startFixerRun().finally(() => setBusy(false));
-      }}
-      title="Start the fixer agent in the background: it fixes the errors in a private copy, compiles to check, and you review its changes"
-      className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-0.5 text-muted hover:border-accent/60 hover:text-text disabled:opacity-50"
-    >
-      <Bot size={12} className="text-accent" /> Let the fixer agent handle it
-    </button>
+    <Tooltip content="Show the fixer run">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={`${label}. Show the fixer run`}
+        className="texo-fade-in inline-flex h-6 items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 pr-2.5 pl-1.5 text-xs text-text transition-colors duration-[var(--dur-2)] hover:bg-accent/20"
+      >
+        <ProgressRing value={value} size={14} label="Fixer progress" />
+        <span className="texo-shimmer truncate">{label}</span>
+      </button>
+    </Tooltip>
   );
 }

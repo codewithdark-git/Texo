@@ -33,8 +33,7 @@ import { isReviewReport, reviewApi, scoreText, type Review, type ReviewReport, t
 import { toast } from "../../ui";
 import { revealSource } from "../../workspace/EditorPane";
 import { useWorkspace } from "../../workspace/store";
-import { dirtyBuffers } from "../chat/composerActions";
-import { useAiPanel } from "../panel/aiPanelStore";
+import { startRun } from "../agents/actions";
 import { InlineConfirm } from "../settings/InlineConfirm";
 import { ChecklistView } from "./ChecklistView";
 import {
@@ -410,20 +409,18 @@ function FixButton({ project, point, from, venue }: { project: string; point: { 
   const start = async () => {
     if (state !== "idle") return;
     setState("starting");
-    try {
-      await agentsApi.start(project, {
-        kind: "task",
-        prompt: fixPrompt(point, from, venue),
-        dirtyBuffers: dirtyBuffers(),
-        options: { title: fixTitle(point.text) },
-      });
-      setState("started");
-      toast("The task agent is on it. Its changes wait for your review in the Agents tab.", "success");
-      useAiPanel.getState().show("agents");
-    } catch (err) {
+    // startRun sends the unsaved buffers, notes the run and opens its tab; it shows its own error.
+    const runId = await startRun(project, {
+      kind: "task",
+      prompt: fixPrompt(point, from, venue),
+      options: { title: fixTitle(point.text) },
+    });
+    if (!runId) {
       setState("idle");
-      toast(errorText(err), "error");
+      return;
     }
+    setState("started");
+    toast("The task agent is on it in its own tab. Its changes wait for your review.", "success");
   };
   return (
     <button

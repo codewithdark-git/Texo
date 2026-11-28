@@ -1,10 +1,11 @@
 // The Agents tab's runs: summaries of the open project's runs, kept live
-// from `agent-run-updated` and `agent-step`, and the step lists of the runs
-// whose cards are expanded (fetched with `agent_get`, then followed live).
+// from `agent-run-updated` and `agent-step`, the step lists of the runs
+// whose cards are expanded (fetched with `agent_get`, then followed live),
+// and the tail of the text each run streams (`agent-message`).
 // The reducers are pure and unit-tested; the store wires them to events.
 
 import { create } from "zustand";
-import { agentsApi, type AgentRun, type RunSummary, type Step } from "../../lib/agentsApi";
+import { agentsApi, isActive, type AgentRun, type MessageEvent, type RunSummary, type Step } from "../../lib/agentsApi";
 
 /** Steps kept per run in the live list (the journal keeps them all). */
 export const MAX_STEPS_SHOWN = 400;
@@ -12,6 +13,47 @@ export const MAX_STEPS_SHOWN = 400;
 export const samePath = (a: string, b: string) => norm(a) === norm(b);
 function norm(p: string) {
   return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/** Characters of streamed text kept per run (and sub-run): enough for the live line. */
+export const STREAM_TAIL = 240;
+
+/** Where a run's (or one of its sub-runs') streamed text is kept. */
+export const streamKey = (runId: string, sub?: string | null) => (sub ? `${runId}#${sub}` : runId);
+
+/** Streamed text per run and sub-run, and which of a run's streams spoke last. */
+export interface Streams {
+  text: Record<string, string>;
+  latest: Record<string, string>;
+}
+
+export const NO_STREAMS: Streams = { text: {}, latest: {} };
+
+/** Adds a streamed piece: `reset` forgets what came before; only the last `STREAM_TAIL` characters are kept. */
+export function applyMessage(streams: Streams, e: MessageEvent): Streams {
+  const key = streamKey(e.runId, e.sub);
+  const joined = (e.reset ? "" : (streams.text[key] ?? "")) + e.text;
+  const text = { ...streams.text };
+  if (joined) text[key] = joined.length > STREAM_TAIL ? joined.slice(joined.length - STREAM_TAIL) : joined;
+  else delete text[key];
+  return { text, latest: { ...streams.latest, [e.runId]: key } };
+}
+
+/** The text a run streams now: its latest sub-run's, or its own. */
+export function runStream(streams: Streams, runId: string): string | undefined {
+  const key = streams.latest[runId];
+  return (key !== undefined ? streams.text[key] : undefined) ?? streams.text[runId];
+}
+
+/** Drops every stream of a run (it finished, or was deleted). */
+export function dropStreams(streams: Streams, runId: string): Streams {
+  if (!(runId in streams.latest) && !(runId in streams.text)) return streams;
+  const text: Record<string, string> = {};
+  const prefix = `${runId}#`;
+  for (const [k, v] of Object.entries(streams.text)) if (k !== runId && !k.startsWith(prefix)) text[k] = v;
+  const latest = { ...streams.latest };
+  delete latest[runId];
+  return { text, latest };
 }
 
 /** Adds or replaces a run summary. */
@@ -108,6 +150,8 @@ interface RunsStore {
   runs: Record<string, RunSummary>;
   /** Steps of runs whose cards are open. */
   steps: Record<string, Step[]>;
+  /** The tail of the text each run streams. */
+  streams: Streams;
   loading: boolean;
   error: string | null;
   /** Lists the project's runs (and forgets other projects'). */
@@ -117,6 +161,7 @@ interface RunsStore {
   unfollow: (runId: string) => void;
   noteRun: (run: RunSummary) => void;
   noteStep: (runId: string, step: Step) => void;
+  noteMessage: (e: MessageEvent) => void;
   forget: (runId: string) => void;
 }
 
@@ -126,10 +171,11 @@ export const useRuns = create<RunsStore>((set, get) => ({
   project: null,
   runs: {},
   steps: {},
+  streams: NO_STREAMS,
   loading: false,
   error: null,
   load: async (project) => {
-    if (get().project !== project) set({ project, runs: {}, steps: {}, error: null });
+    if (get().project !== project) set({ project, runs: {}, steps: {}, streams: NO_STREAMS, error: null });
     set({ loading: true });
     try {
       const list = await agentsApi.list(project);
@@ -164,11 +210,17 @@ export const useRuns = create<RunsStore>((set, get) => ({
   noteRun: (run) => {
     const p = get().project;
     if (!p || !samePath(run.project, p)) return;
-    set((s) => ({ runs: upsertRun(s.runs, run) }));
+    // A run that stopped working says nothing more: forget its streamed text.
+    set((s) => ({ runs: upsertRun(s.runs, run), ...(isActive(run.status) ? {} : { streams: dropStreams(s.streams, run.id) }) }));
   },
   noteStep: (runId, step) => {
     if (!get().steps[runId]) return;
     set((s) => ({ steps: { ...s.steps, [runId]: mergeStep(s.steps[runId] ?? [], step) } }));
+  },
+  noteMessage: (e) => {
+    const run = get().runs[e.runId];
+    if (!run || !isActive(run.status)) return;
+    set((s) => ({ streams: applyMessage(s.streams, e) }));
   },
   forget: (runId) =>
     set((s) => {
@@ -176,7 +228,7 @@ export const useRuns = create<RunsStore>((set, get) => ({
       const steps = { ...s.steps };
       delete runs[runId];
       delete steps[runId];
-      return { runs, steps };
+      return { runs, steps, streams: dropStreams(s.streams, runId) };
     }),
 }));
 
@@ -190,6 +242,7 @@ export function listenRunEvents(): () => void {
     const offs = [
       agentsApi.onRunUpdated((r) => useRuns.getState().noteRun(r)),
       agentsApi.onStep((e) => useRuns.getState().noteStep(e.runId, e.step)),
+      agentsApi.onMessage((e) => useRuns.getState().noteMessage(e)),
     ];
     stop = () => offs.forEach((p) => void p.then((f) => f()).catch(() => {}));
   }

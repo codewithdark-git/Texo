@@ -170,12 +170,21 @@ export function NewTaskDialog({
   kind,
   profile,
   profiles,
+  initialPrompt,
+  initialAttachments,
+  onStarted,
   onClose,
 }: {
   project: string;
   kind: NewTaskKind;
   profile: AgentProfile | null;
   profiles: AgentProfile[];
+  /** Words to start from (e.g. typed in the AI Chat bar). */
+  initialPrompt?: string;
+  /** Files already read (e.g. attached in the AI Chat bar). */
+  initialAttachments?: ReadyAttachment[];
+  /** Called with the new run's id before the dialog closes. */
+  onStarted?: (runId: string) => void;
   onClose: () => void;
 }) {
   const choices = useMemo(() => {
@@ -184,8 +193,8 @@ export function NewTaskDialog({
   }, [profiles, kind]);
   const [profileId, setProfileId] = useState(profile?.id ?? choices[0]?.id ?? kind);
   const [model, setModel] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [items, setItems] = useState<Item[]>([]);
+  const [prompt, setPrompt] = useState(initialPrompt ?? "");
+  const [items, setItems] = useState<Item[]>(() => (initialAttachments ?? []).map((r) => ({ ...r, id: `a${nextId++}`, save: false, saveAs: defaultSaveAs(r) })));
   const [reviewRunId, setReviewRunId] = useState("");
   const [starting, setStarting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -263,7 +272,9 @@ export function NewTaskDialog({
     };
     const id = await startRun(project, request);
     setStarting(false);
-    if (id) onClose();
+    if (!id) return;
+    onStarted?.(id);
+    onClose();
   };
 
   const title = kind === "rebuttal" ? "Respond to reviewers" : profile ? profile.name : "Custom task";
