@@ -42,7 +42,13 @@ pub fn g(e: git2::Error) -> AppError {
 /// libgit2 reads the user's global git config and checks folder ownership
 /// by default. Texo's repo is private, so neither applies (an exFAT or
 /// network drive would otherwise fail the ownership check).
-fn init_libgit2() {
+///
+/// Also initializes libgit2 itself (the `opts` calls do). Every git2 call
+/// that doesn't go through a `Repository` must run this first: some of git2's
+/// free functions (`merge_file`, for one) don't initialize libgit2, and
+/// before `git_libgit2_init` its allocator fails every allocation and errors
+/// can't be recorded, so the call fails with "no error".
+pub fn init_libgit2() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| unsafe {
         use git2::ConfigLevel::*;

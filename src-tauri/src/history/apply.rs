@@ -98,6 +98,9 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> AppResult<Merged> {
     if base == ours {
         return Ok(Merged { text: theirs.to_string(), conflict: false });
     }
+    // `git2::merge_file` doesn't initialize libgit2, and this can be the
+    // first git call in the process (the review dialog, before any history).
+    repo::init_libgit2();
     let mut b = git2::MergeFileInput::new();
     b.content(base.as_bytes());
     let mut o = git2::MergeFileInput::new();

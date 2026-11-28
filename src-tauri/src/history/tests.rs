@@ -430,6 +430,30 @@ fn merge3_cases() {
     assert_eq!(apply::merge3("x", "y", "y").unwrap().text, "y");
 }
 
+/// `merge3` can be the first libgit2 call in the process (the review dialog
+/// before any history was opened), so it must initialize libgit2 itself:
+/// `git2::merge_file` doesn't, and an uninitialized libgit2 fails it with
+/// "no error". Other tests in this binary initialize libgit2, so the check
+/// runs in a fresh copy of the test binary that runs only this test.
+#[test]
+fn merge3_works_as_the_first_git_call_in_a_process() {
+    const CHILD: &str = "TEXO_TEST_MERGE3_FIRST_CALL";
+    const NAME: &str = "history::tests::merge3_works_as_the_first_git_call_in_a_process";
+    if std::env::var_os(CHILD).is_some() {
+        let m = apply::merge3("a\nb\nc\n", "A\nb\nc\n", "a\nb\nC\n").unwrap();
+        assert_eq!(m, apply::Merged { text: "A\nb\nC\n".into(), conflict: false });
+        return;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", NAME, "--test-threads=1"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("1 passed"), "the child didn't run the test: {stdout}");
+}
+
 #[test]
 fn labels_and_compiled_ok_throttle() {
     let d = project();
