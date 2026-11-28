@@ -1,66 +1,49 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowLeft, Columns2, FileCode2, FileText, History, ListTree, Files, Search, X } from "lucide-react";
+import { X } from "lucide-react";
 import { SHOW_PDF_EVENT, type ProjectSummary } from "../lib/api";
 import { useApp } from "../store";
-import { Button } from "../components/Dialog";
-import { AppMenu } from "../components/AppMenu";
-import { SupportTopButton } from "../components/SupportDialog";
-import { countMarkdownWords, countWords } from "../lib/wordcount";
-import { formatRelative } from "../lib/projects";
 import { toast, useUi } from "../ui";
 import { useCompile } from "./compileStore";
 import { baseName } from "./paths";
 import { QuickOpen } from "./QuickOpen";
 import { FixDialog } from "../ai/FixDialog";
-import { AiPanel, AiPanelButton } from "../ai/panel/AiPanel";
+import { AiPanelButton } from "../ai/panel/AiPanel";
 import { useAiPanel } from "../ai/panel/aiPanelStore";
+import { AgentDialogs } from "../ai/agents/AgentsTab";
+import { listenChatEvents } from "../ai/chat/chatStore";
+import { AiTabView, aiTabLabel, closeAiTab, useAiTabsSync } from "../ai/tabs/AiTabView";
+import { cycleTab, runIdOf, useAiTabs } from "../ai/tabs/aiTabsStore";
+import { useRuns } from "../ai/agents/runsStore";
 import { attachPaths, CHAT_DROP_ATTR } from "../ai/chat/composerActions";
+import { CommandCenter } from "../ai/command/CommandCenter";
+import { AiComposerBar, useComposerShortcutFallback } from "../ai/composer/AiComposerBar";
 import { routeDrop } from "../ai/pathDrop";
 import { zoomEditor } from "./EditorPane";
-import { getModel } from "./store";
-import { CompileControls } from "./CompileControls";
 import { CompilePanel } from "./CompilePanel";
 import { EditorPane } from "./EditorPane";
-import { FileTree } from "./FileTree";
-import { Outline } from "./Outline";
-import { SearchPanel } from "./SearchPanel";
-import { TabBar } from "./TabBar";
+import { LeftSidebar } from "./LeftSidebar";
+import { sidebarColumn, useLayout } from "./layoutStore";
+import { StatusBar } from "./StatusBar";
+import { focusSelectedTab, TabBar } from "./TabBar";
+import { TopBar } from "./TopBar";
 import { useWorkspace } from "./store";
-import { showsVisual } from "./editorBridge";
-import { HistoryPanel, HistoryStatusItem } from "../history/HistoryPanel";
 import { useHistory } from "../history/historyStore";
 
-type Layout = "split" | "code" | "pdf";
-type Panel = "files" | "outline" | "search" | "history";
-
-const LAYOUT_KEY = "texo.layout";
-
-interface LayoutPrefs {
-  layout: Layout;
-  sidebar: number;
-  split: number;
-}
-
-function loadLayout(): LayoutPrefs {
-  const fallback: LayoutPrefs = { layout: "split", sidebar: 240, split: 0.55 };
-  try {
-    return { ...fallback, ...JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? "{}") };
-  } catch {
-    return fallback;
-  }
-}
-
 /** Starts a drag that reports the pointer's x position until release. */
-function startDrag(e: ReactPointerEvent, onMove: (x: number) => void, onEnd: () => void) {
+function startDrag(e: ReactPointerEvent, onMove: (x: number) => void, onEnd: (moved: boolean) => void) {
   e.preventDefault();
-  const move = (ev: PointerEvent) => onMove(ev.clientX);
+  let moved = false;
+  const move = (ev: PointerEvent) => {
+    moved = true;
+    onMove(ev.clientX);
+  };
   const up = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     document.body.style.cursor = "";
-    onEnd();
+    onEnd(moved);
   };
   document.body.style.cursor = "col-resize";
   window.addEventListener("pointermove", move);
@@ -70,23 +53,20 @@ function startDrag(e: ReactPointerEvent, onMove: (x: number) => void, onEnd: () 
 export function Workspace({ project }: { project: ProjectSummary }) {
   const ws = useWorkspace();
   const dialog = useUi((s) => s.dialog);
-  const [prefs, setPrefs] = useState(loadLayout);
-  const [panel, setPanel] = useState<Panel>("files");
+  const layout = useLayout((s) => s.layout);
+  const split = useLayout((s) => s.split);
+  const column = useLayout(sidebarColumn);
+  // The sidebar's width animates when it folds or unfolds, but follows the pointer at once while dragged.
+  const [resizing, setResizing] = useState(false);
   // Bumped by Ctrl+Shift+F so the search box takes focus even when shown.
   const [searchFocus, setSearchFocus] = useState(0);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  // True once the project's files are open, so its AI tabs can come back.
+  const [ready, setReady] = useState(false);
+  const aiTab = useAiTabs((s) => s.active);
   const body = useRef<HTMLDivElement>(null);
-
-  const updatePrefs = (patch: Partial<LayoutPrefs>) =>
-    setPrefs((p) => {
-      const next = { ...p, ...patch };
-      try {
-        localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
-      } catch {
-        // Layout is remembered per session only.
-      }
-      return next;
-    });
+  // The bar lives under the editor; in "PDF only" Ctrl+J brings the editor side back for it.
+  useComposerShortcutFallback();
 
   const close = async () => {
     useCompile.getState().reset();
@@ -96,15 +76,26 @@ export function Workspace({ project }: { project: ProjectSummary }) {
   };
 
   useEffect(() => {
+    let live = true;
+    setReady(false);
     void useWorkspace
       .getState()
       .init(project)
-      .then(() => useCompile.getState().init());
+      .then(() => {
+        if (live) setReady(true);
+        return useCompile.getState().init();
+      });
     return () => {
+      live = false;
       useCompile.getState().reset();
       void useWorkspace.getState().teardown();
     };
   }, [project.path]);
+
+  // Chat, Agents and agent runs open as editor tabs; they come back per project.
+  useAiTabsSync(project.id, project.path, ready);
+  // Chat answers are heard whatever tab shows.
+  useEffect(() => listenChatEvents(), []);
 
   // History status for the status bar and the History tab; new versions
   // appear after saves (30 s idle), compiles and AI runs, so check now and then.
@@ -123,18 +114,21 @@ export function Workspace({ project }: { project: ProjectSummary }) {
 
   // Showing the PDF needs the preview pane visible.
   useEffect(() => {
-    const show = () => setPrefs((p) => (p.layout === "code" ? { ...p, layout: "split" } : p));
+    const show = () => useLayout.getState().openRightTab("pdf");
     window.addEventListener(SHOW_PDF_EVENT, show);
     return () => window.removeEventListener(SHOW_PDF_EVENT, show);
   }, []);
 
-  // Window title: the open file and project.
+  // Window title: the tab in front (a file, Chat, Agents or a run) and the project.
   const active = ws.active;
   const projectName = ws.project?.name ?? project.name;
+  const aiRunId = aiTab ? runIdOf(aiTab) : null;
+  const aiRun = useRuns((s) => (aiRunId ? s.runs[aiRunId] : undefined));
+  const front = aiTab ? aiTabLabel(aiTab, aiRun) : active ? baseName(active) : null;
   useEffect(() => {
-    const title = active ? `${baseName(active)} — ${projectName} — Texo` : `${projectName} — Texo`;
+    const title = front ? `${front} — ${projectName} — Texo` : `${projectName} — Texo`;
     void getCurrentWindow().setTitle(title).catch(() => {});
-  }, [active, projectName]);
+  }, [front, projectName]);
 
   // Workspace shortcuts. Monaco keeps the keys it uses itself (Ctrl+F, …);
   // these reach the window from the editor and everywhere else.
@@ -149,11 +143,16 @@ export function Workspace({ project }: { project: ProjectSummary }) {
       };
       if (key === "a" && e.shiftKey) {
         handled();
-        useAiPanel.getState().toggle();
+        useAiPanel.getState().show("chat");
       } else if (key === "f" && e.shiftKey) {
         handled();
-        setPanel("search");
+        useLayout.getState().showSidebarTab("search");
         setSearchFocus((n) => n + 1);
+      } else if (key === "b") {
+        // Ctrl+B is Bold in both editors, which take the key first, so there
+        // only Ctrl+Shift+B folds the sidebar. Elsewhere either one does.
+        handled();
+        useLayout.getState().toggleSidebar();
       } else if (key === "enter") {
         handled();
         void useCompile.getState().compile();
@@ -162,12 +161,17 @@ export function Workspace({ project }: { project: ProjectSummary }) {
         useUi.getState().openDialog("quickOpen");
       } else if (key === "w" && !e.shiftKey) {
         handled();
-        if (state.active) void state.closeTab(state.active);
-      } else if (key === "tab" && state.tabs.length > 1) {
+        const ai = useAiTabs.getState().active;
+        if (ai) closeAiTab(ai);
+        else if (state.active) void state.closeTab(state.active);
+        focusSelectedTab();
+      } else if (key === "tab") {
+        // Through files and AI tabs alike.
+        const next = cycleTab(state.tabs, state.active, useAiTabs.getState(), e.shiftKey);
+        if (!next) return;
         handled();
-        const i = state.active ? state.tabs.indexOf(state.active) : -1;
-        const next = (i + (e.shiftKey ? -1 : 1) + state.tabs.length) % state.tabs.length;
-        void state.openFile(state.tabs[next]);
+        if (next.kind === "ai") useAiTabs.getState().activate(next.id);
+        else void state.openFile(next.path);
       } else if ((key === "=" || key === "+") && !e.shiftKey) {
         handled();
         zoomEditor(1);
@@ -233,56 +237,21 @@ export function Workspace({ project }: { project: ProjectSummary }) {
     return () => void pending.then((off) => off());
   }, []);
 
-  const showCode = prefs.layout !== "pdf";
-  const showPdf = prefs.layout !== "code";
+  const showCode = layout !== "pdf";
+  const showPdf = layout !== "code";
   const name = ws.project?.name ?? project.name;
 
   return (
     <div className="flex h-full flex-col">
       {dialog === "quickOpen" && <QuickOpen onClose={() => useUi.getState().openDialog(null)} />}
       <FixDialog />
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-        <Button variant="ghost" onClick={() => void close()} aria-label="Back to projects">
-          <ArrowLeft size={16} />
-        </Button>
-        <h1 className="truncate font-semibold">{name}</h1>
-        <button
-          type="button"
-          onClick={() => useUi.getState().openDialog("quickOpen")}
-          title="Quick Open (Ctrl+P)"
-          className="ml-4 hidden h-8 max-w-64 flex-1 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-left text-[13px] text-muted hover:border-accent/50 md:flex"
-        >
-          <span className="flex-1 truncate">Go to file…</span>
-          <kbd className="font-mono text-[11px]">Ctrl+P</kbd>
-        </button>
-        <div className="ml-auto">
-          <CompileControls />
-        </div>
-        <div className="flex rounded-lg border border-border bg-surface p-0.5">
-          {(
-            [
-              ["code", "Editor only", FileCode2],
-              ["split", "Editor and PDF", Columns2],
-              ["pdf", "PDF only", FileText],
-            ] as const
-          ).map(([value, label, Icon]) => (
-            <button
-              key={value}
-              type="button"
-              aria-label={label}
-              title={label}
-              aria-pressed={prefs.layout === value}
-              onClick={() => updatePrefs({ layout: value })}
-              className={`rounded-md p-1.5 ${prefs.layout === value ? "bg-surface-2 text-text" : "text-muted hover:text-text"}`}
-            >
-              <Icon size={15} />
-            </button>
-          ))}
-        </div>
-        <AiPanelButton project={project.path} />
-        <SupportTopButton />
-        <AppMenu />
-      </header>
+      <AgentDialogs project={project.path} />
+      <TopBar
+        name={name}
+        onBack={() => void close()}
+        commandCenter={<CommandCenter project={project.path} />}
+        ai={<AiPanelButton project={project.path} />}
+      />
 
       {ws.error && (
         <div role="alert" className="flex items-center gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm">
@@ -293,64 +262,48 @@ export function Workspace({ project }: { project: ProjectSummary }) {
         </div>
       )}
 
-      <div ref={body} className="flex min-h-0 flex-1">
-        <aside style={{ width: prefs.sidebar }} className="flex shrink-0 flex-col border-r border-border bg-surface/60">
-          <div className="flex gap-1 border-b border-border p-1.5">
-            {(
-              [
-                ["files", "Files", Files],
-                ["outline", "Outline", ListTree],
-                ["search", "Search", Search],
-                ["history", "History", History],
-              ] as const
-            ).map(([value, label, Icon]) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={panel === value}
-                title={value === "search" ? "Search in project (Ctrl+Shift+F)" : value === "history" ? "Every saved version of this project" : label}
-                onClick={() => setPanel(value)}
-                className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-xs ${
-                  panel === value ? "bg-surface-2 text-text" : "text-muted hover:text-text"
-                }`}
-              >
-                <Icon size={14} /> <span className="truncate">{label}</span>
-              </button>
-            ))}
-          </div>
-          {panel === "files" ? (
-            <FileTree dropTarget={dropTarget} />
-          ) : panel === "outline" ? (
-            <Outline />
-          ) : panel === "history" ? (
-            <HistoryPanel />
-          ) : (
-            <SearchPanel focusKey={searchFocus} />
-          )}
-        </aside>
+      <div
+        ref={body}
+        className="grid min-h-0 flex-1"
+        style={{
+          gridTemplateColumns: `${column}px 4px minmax(0, 1fr)`,
+          transition: resizing ? undefined : "grid-template-columns var(--dur-3) var(--ease-standard)",
+        }}
+      >
+        <LeftSidebar project={project.path} dropTarget={dropTarget} searchFocus={searchFocus} />
         <div
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
-          onPointerDown={(e) =>
+          title="Drag to resize. Double-click to fold (Ctrl+Shift+B)."
+          onDoubleClick={() => useLayout.getState().toggleSidebar()}
+          onPointerDown={(e) => {
+            setResizing(true);
             startDrag(
               e,
               (x) => {
                 const left = body.current?.getBoundingClientRect().left ?? 0;
-                setPrefs((p) => ({ ...p, sidebar: Math.min(480, Math.max(180, x - left)) }));
+                useLayout.getState().setSidebarWidth(x - left, false);
               },
-              () => updatePrefs({}),
-            )
-          }
-          className="w-1 shrink-0 cursor-col-resize hover:bg-accent/40"
+              (moved) => {
+                setResizing(false);
+                if (moved) useLayout.getState().setSidebarWidth(useLayout.getState().sidebar);
+              },
+            );
+          }}
+          className="cursor-col-resize hover:bg-accent/40"
         />
 
-        <div className="flex min-w-0 flex-1">
+        <div className="flex min-h-0 min-w-0">
           {showCode && (
-            <section style={{ flex: showPdf ? prefs.split : 1 }} className="flex min-w-0 flex-col">
+            <section style={{ flex: showPdf ? split : 1 }} className="flex min-w-0 flex-col">
               <TabBar />
-              <EditorPane />
-              <StatusBar onHistory={() => setPanel("history")} />
+              {/* The editor stays mounted (cursor, scroll, undo) while an AI tab takes its place. */}
+              <div className={aiTab ? "hidden" : "contents"}>
+                <EditorPane />
+              </div>
+              {aiTab && <AiTabView project={project.path} tab={aiTab} />}
+              <AiComposerBar project={project.path} />
             </section>
           )}
           {showCode && showPdf && (
@@ -362,102 +315,23 @@ export function Workspace({ project }: { project: ProjectSummary }) {
                 const host = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
                 startDrag(
                   e,
-                  (x) => setPrefs((p) => ({ ...p, split: Math.min(0.8, Math.max(0.2, (x - host.left) / host.width)) })),
-                  () => updatePrefs({}),
+                  (x) => useLayout.getState().setSplit((x - host.left) / host.width, false),
+                  (moved) => moved && useLayout.getState().setSplit(useLayout.getState().split),
                 );
               }}
               className="w-1 shrink-0 cursor-col-resize border-l border-border hover:bg-accent/40"
             />
           )}
           {showPdf && (
-            <section style={{ flex: showCode ? 1 - prefs.split : 1 }} className="flex min-w-0 flex-col bg-surface-2/40">
-              <CompilePanel />
+            <section style={{ flex: showCode ? 1 - split : 1 }} className="flex min-w-0 flex-col bg-surface-2/40">
+              <CompilePanel project={project.path} />
             </section>
           )}
         </div>
-        <AiPanel project={project.path} />
       </div>
-    </div>
-  );
-}
 
-/** The word counter for a file: LaTeX or Markdown, or null for neither. */
-function counterFor(path: string | null): ((text: string) => number) | null {
-  if (path?.endsWith(".tex")) return countWords;
-  if (path && /\.(md|markdown)$/i.test(path)) return countMarkdownWords;
-  return null;
-}
-
-/** Words in the open .tex or .md file, recounted shortly after edits. */
-function useWordCount(active: string | null): number | null {
-  const [count, setCount] = useState<number | null>(null);
-  const isText = useWorkspace((s) => (s.active ? s.views[s.active]?.kind === "text" : false));
-  useEffect(() => {
-    const counter = counterFor(active);
-    const model = active && counter && isText ? getModel(active) : undefined;
-    if (!model || !counter) {
-      setCount(null);
-      return;
-    }
-    setCount(counter(model.getValue()));
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const sub = model.onDidChangeContent(() => {
-      clearTimeout(timer);
-      timer = setTimeout(() => setCount(counter(model.getValue())), 400);
-    });
-    return () => {
-      clearTimeout(timer);
-      sub.dispose();
-    };
-  }, [active, isText]);
-  return count;
-}
-
-/** "Compiled 2 min ago", refreshed every half minute. */
-function useCompiledAgo(): string | null {
-  const finishedAt = useCompile((s) => s.finishedAt);
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => tick((t) => t + 1), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  return finishedAt ? formatRelative(new Date(finishedAt).toISOString()) : null;
-}
-
-function StatusBar({ onHistory }: { onHistory: () => void }) {
-  const { cursor, saving, status, active, project } = useWorkspace();
-  const words = useWordCount(active);
-  const compiledAgo = useCompiledAgo();
-  const compiling = useCompile((s) => s.compiling);
-  const unsaved = Object.values(status).some((s) => s.dirty);
-  const conflict = active ? status[active]?.conflict : false;
-  const modes = useWorkspace((s) => s.modes);
-  const lang = active?.match(/\.(tex|bib|sty|cls|md|markdown)$/i)?.[1].toLowerCase();
-  const langLabel =
-    (lang === "bib" ? "BibTeX" : lang === "md" || lang === "markdown" ? "Markdown" : lang ? "LaTeX" : active ? "Plain text" : "") +
-    (showsVisual(active, modes) ? " · Visual" : "");
-  return (
-    <div className="flex h-6 shrink-0 items-center gap-4 overflow-hidden whitespace-nowrap border-t border-border bg-surface/60 px-3 text-[11px] text-muted">
-      <span className="shrink-0">{conflict ? "Changed on disk" : saving > 0 ? "Saving…" : unsaved ? "Unsaved changes" : "All changes saved"}</span>
-      {project?.mainDocument && <span className="min-w-0 truncate">Main: {project.mainDocument}</span>}
-      {compiling ? <span>Compiling…</span> : compiledAgo && <span className="min-w-0 truncate" title="Last compile">Compiled {compiledAgo}</span>}
-      <span className="ml-auto shrink-0">{langLabel}</span>
-      <HistoryStatusItem onOpen={onHistory} />
-      {words !== null && (
-        <button
-          type="button"
-          title="Words in this file's text. Click for details."
-          onClick={() => useUi.getState().openDialog("wordCount")}
-          className="shrink-0 rounded px-1 hover:bg-surface-2 hover:text-text"
-        >
-          {words.toLocaleString()} words
-        </button>
-      )}
-      {cursor && (
-        <span className="shrink-0">
-          Ln {cursor.line}, Col {cursor.column}
-        </span>
-      )}
+      {/* Full width, below the panes, so it shows in every layout. */}
+      <StatusBar />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-// The "History" tab in the left sidebar: every saved version of the project,
+// The "History" tab in the right panel: every saved version of the project,
 // grouped by day, with AI runs folded into one group each. Opening a version
 // lists its files; a file opens a diff. Restoring and undoing always make a
 // new version, so nothing in history is ever lost.
@@ -55,64 +55,67 @@ export function HistoryPanel() {
   const st = useHistory.getState();
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col text-[13px]">
-      <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
-        <Choice<HistoryAuthorFilter>
-          label="Show versions by"
-          value={author}
-          options={[
-            ["all", "All"],
-            ["you", "You"],
-            ["ai", "AI"],
-          ]}
-          onChange={(v) => st.setAuthor(v)}
-        />
-        <span className="flex-1" />
-        <button
-          type="button"
-          title="Save a version now"
-          aria-label="Save a version now"
-          disabled={!status?.active}
-          onClick={() => void st.snapshot()}
-          className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-text disabled:opacity-40"
-        >
-          <Save size={14} />
-        </button>
-        <Menu
-          trigger={({ toggle }) => (
-            <button type="button" aria-label="More history actions" onClick={toggle} className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-text">
-              <MoreHorizontal size={14} />
-            </button>
-          )}
-          items={[
-            status?.enabled
-              ? { label: "Turn history off for this project", icon: <Power size={14} />, onSelect: () => setAsk({ type: "off" }) }
-              : { label: "Turn history on for this project", icon: <Power size={14} />, onSelect: () => void st.setEnabled(true) },
-          ]}
-        />
-      </div>
-
-      <div className="flex items-center gap-1 border-b border-border px-2 py-1 text-[11px]">
-        {path ? (
-          <span className="flex min-w-0 flex-1 items-center gap-1 rounded bg-accent/10 px-1.5 py-0.5 text-accent" title={path}>
-            <FileClock size={11} className="shrink-0" />
-            <span className="min-w-0 truncate">History of {baseName(path)}</span>
-            <button type="button" aria-label="Show the whole project's history" title="Show the whole project's history" onClick={() => st.setPath(null)} className="ml-auto shrink-0 rounded hover:bg-accent/20">
-              <X size={11} />
-            </button>
-          </span>
-        ) : (
+    <div className="@container flex min-h-0 flex-1 flex-col text-[13px]">
+      {/* When the panel is wide enough, the file filter sits on the same row as the header. */}
+      <div className="flex flex-col border-b border-border @min-[480px]:flex-row @min-[480px]:items-center">
+        <div className="flex items-center gap-1.5 px-2 py-1.5 @min-[480px]:min-w-0 @min-[480px]:flex-1">
+          <Choice<HistoryAuthorFilter>
+            label="Show versions by"
+            value={author}
+            options={[
+              ["all", "All"],
+              ["you", "You"],
+              ["ai", "AI"],
+            ]}
+            onChange={(v) => st.setAuthor(v)}
+          />
+          <span className="flex-1" />
           <button
             type="button"
-            disabled={!activeFile}
-            title={activeFile ? `Only versions that changed ${activeFile}` : "Open a file to see its history"}
-            onClick={() => activeFile && st.setPath(activeFile)}
-            className="inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-0.5 text-muted hover:bg-surface-2 hover:text-text disabled:opacity-40"
+            title="Save a version now"
+            aria-label="Save a version now"
+            disabled={!status?.active}
+            onClick={() => void st.snapshot()}
+            className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-text disabled:opacity-40"
           >
-            <FileClock size={11} className="shrink-0" />
-            <span className="truncate">History of this file{activeFile ? ` (${baseName(activeFile)})` : ""}</span>
+            <Save size={14} />
           </button>
-        )}
+          <Menu
+            trigger={({ toggle }) => (
+              <button type="button" aria-label="More history actions" onClick={toggle} className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-text">
+                <MoreHorizontal size={14} />
+              </button>
+            )}
+            items={[
+              status?.enabled
+                ? { label: "Turn history off for this project", icon: <Power size={14} />, onSelect: () => setAsk({ type: "off" }) }
+                : { label: "Turn history on for this project", icon: <Power size={14} />, onSelect: () => void st.setEnabled(true) },
+            ]}
+          />
+        </div>
+
+        <div className="flex min-w-0 items-center gap-1 border-t border-border px-2 py-1 text-[11px] @min-[480px]:order-first @min-[480px]:max-w-[55%] @min-[480px]:border-t-0">
+          {path ? (
+            <span className="flex min-w-0 flex-1 items-center gap-1 rounded bg-accent/10 px-1.5 py-0.5 text-accent" title={path}>
+              <FileClock size={11} className="shrink-0" />
+              <span className="min-w-0 truncate">History of {baseName(path)}</span>
+              <button type="button" aria-label="Show the whole project's history" title="Show the whole project's history" onClick={() => st.setPath(null)} className="ml-auto shrink-0 rounded hover:bg-accent/20">
+                <X size={11} />
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              disabled={!activeFile}
+              title={activeFile ? `Only versions that changed ${activeFile}` : "Open a file to see its history"}
+              onClick={() => activeFile && st.setPath(activeFile)}
+              className="inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-0.5 text-muted hover:bg-surface-2 hover:text-text disabled:opacity-40"
+            >
+              <FileClock size={11} className="shrink-0" />
+              <span className="truncate">History of this file{activeFile ? ` (${baseName(activeFile)})` : ""}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       <Banners onTurnOn={() => void st.setEnabled(true)} />

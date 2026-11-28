@@ -10,6 +10,8 @@ import { getActiveEditor, setCodeEditor, showsVisual, toggleMode, type ActiveEdi
 import { syncToPdf } from "./PdfViewer";
 import { nativePath } from "./paths";
 import { getModel, savedCursor, useWorkspace, visualSupported } from "./store";
+import { useAiTabs } from "../ai/tabs/aiTabsStore";
+import { mayAutoFocus } from "./tabFocus";
 
 const loadVisual = () => import("../visual/VisualPane");
 const VisualPane = lazy(loadVisual);
@@ -36,6 +38,12 @@ export async function revealSource(file: string, line: number) {
 }
 
 export function revealLine(line: number) {
+  // An AI tab in front hides the editor: put the file back first, then move once it shows.
+  if (useAiTabs.getState().active) {
+    useAiTabs.getState().activate(null);
+    requestAnimationFrame(() => getActiveEditor()?.revealLine(line));
+    return;
+  }
   getActiveEditor()?.revealLine(line);
 }
 
@@ -213,6 +221,8 @@ export function EditorPane() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "e") return;
+      // An AI tab is in front: the file behind it isn't the one to switch.
+      if (useAiTabs.getState().active) return;
       const ws = useWorkspace.getState();
       const path = ws.active;
       if (!path || !visualSupported(path) || ws.views[path]?.kind !== "text") return;
@@ -241,7 +251,7 @@ export function EditorPane() {
         editor.revealPositionInCenterIfOutsideViewport({ lineNumber: remembered.line, column: remembered.column });
       }
       if (!showsVisual(active)) {
-        editor.focus();
+        if (mayAutoFocus()) editor.focus();
         const pos = editor.getPosition();
         useWorkspace.getState().setCursor(pos ? { line: pos.lineNumber, column: pos.column } : null);
       }
