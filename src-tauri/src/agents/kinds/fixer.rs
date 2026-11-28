@@ -21,7 +21,7 @@ use super::{AgentKind, Limits, Outcome};
 use crate::agents::run_loop::{LoopEnd, RunCx};
 use crate::agents::tools::build;
 use crate::agents::tools::registry::*;
-use crate::agents::types::{cap, one_line, ChangeEntry, Report, Step, StepKind};
+use crate::agents::types::{cap, one_line, ChangeEntry, Phase, PhaseStatus, ProgressUpdate, Report, RunProgress, Step, StepKind};
 use crate::ai::error::AiResult;
 use crate::ai::llm::{Msg, Part, ToolSpec};
 use crate::compile::{CompileResult, Status};
@@ -55,8 +55,17 @@ impl Tool for RoundedCompile {
                     "All {MAX_COMPILE_ROUNDS} compile rounds are used. Don't edit any more: finish with your message about what is fixed and what still fails."
                 ));
             }
+            cx.progress(phase_update(CHECK, PhaseStatus::Active, None));
             let mut out = Builtin::CompileCheck.call(cx, args).await;
             let used = cx.build.rounds();
+            match cx.build.last().filter(|_| out.ok) {
+                Some(r) => {
+                    for u in after_compile(used, r.status == Status::Success, errors(&r).len()) {
+                        cx.progress(u);
+                    }
+                }
+                None => cx.progress(phase_update(CHECK, PhaseStatus::Pending, None)),
+            }
             if out.ok {
                 out.content.push_str(&format!("\n(Compile round {used} of {MAX_COMPILE_ROUNDS}.)"));
                 let ok = cx.build.last().is_some_and(|r| r.status == Status::Success);
@@ -67,6 +76,87 @@ impl Tool for RoundedCompile {
             out
         })
     }
+}
+
+const READ: &str = "read";
+const CHECK: &str = "check";
+const DONE: &str = "done";
+
+fn round_id(k: u32) -> String {
+    format!("round{k}")
+}
+
+/// The fixer's phases: read the errors, up to three fix rounds, the
+/// compile check, done.
+pub fn phases() -> Vec<Phase> {
+    let mut v = vec![Phase::new(READ, "Read the errors")];
+    for k in 1..=MAX_COMPILE_ROUNDS {
+        v.push(Phase::new(&round_id(k), &format!("Fix round {k} of {MAX_COMPILE_ROUNDS}")));
+    }
+    v.push(Phase::new(CHECK, "Compile check"));
+    v.push(Phase::new(DONE, "Done"));
+    v
+}
+
+fn errors_left(n: usize) -> String {
+    match n {
+        0 => "No errors left".into(),
+        1 => "1 error left".into(),
+        n => format!("{n} errors left"),
+    }
+}
+
+fn phase_update(id: &str, status: PhaseStatus, detail: Option<String>) -> ProgressUpdate {
+    ProgressUpdate::Phase { id: id.into(), status, detail, done: None, total: None }
+}
+
+/// Round k fixes what compile k found (compile 1 is Texo's own, before the
+/// model starts). After compile `c` (1-based), round c-1 is over; when it
+/// still fails, round c starts.
+pub fn after_compile(c: u32, success: bool, errors: usize) -> Vec<ProgressUpdate> {
+    let mut out = Vec::new();
+    if c >= 2 {
+        out.push(phase_update(&round_id((c - 1).min(MAX_COMPILE_ROUNDS)), PhaseStatus::Done, Some(errors_left(errors))));
+    }
+    if success {
+        out.push(phase_update(CHECK, PhaseStatus::Done, Some("The document compiles".into())));
+    } else {
+        out.push(phase_update(CHECK, PhaseStatus::Pending, None));
+        if (1..=MAX_COMPILE_ROUNDS).contains(&c) {
+            out.push(phase_update(&round_id(c), PhaseStatus::Active, Some(errors_left(errors))));
+        }
+    }
+    out
+}
+
+/// The phases when the run ends: a round still going is finished, rounds
+/// not reached are skipped, the check says whether the fix compiles.
+pub fn finish_phases(p: &mut RunProgress, fixed: bool, compiled: bool) {
+    for k in 1..=MAX_COMPILE_ROUNDS {
+        let id = round_id(k);
+        match p.phase(&id).map(|ph| ph.status) {
+            Some(PhaseStatus::Active) => p.set_phase(&id, PhaseStatus::Done, None, None, None),
+            Some(PhaseStatus::Pending) => p.set_phase(&id, PhaseStatus::Skipped, None, None, None),
+            _ => {}
+        }
+    }
+    if p.phase(READ).is_some_and(|ph| !ph.status.is_settled()) {
+        p.set_phase(READ, PhaseStatus::Skipped, None, None, None);
+    }
+    let check = if !compiled {
+        (PhaseStatus::Skipped, "Texo couldn't compile here".to_string())
+    } else if fixed {
+        (PhaseStatus::Done, "The document compiles".to_string())
+    } else {
+        (PhaseStatus::Failed, "Still doesn't compile".to_string())
+    };
+    p.set_phase(CHECK, check.0, Some(check.1), None, None);
+    p.set_phase(DONE, PhaseStatus::Done, None, None, None);
+}
+
+/// The document compiled cleanly at the start: nothing was done.
+pub fn nothing_to_fix(p: &mut RunProgress) {
+    p.skip_all();
 }
 
 impl AgentKind for Fixer {
@@ -165,6 +255,7 @@ fn compile_step(text: &str, ok: bool, ms: u64) -> Step {
         at: 0,
         sub: None,
         notice: false,
+        data: None,
     }
 }
 
@@ -261,6 +352,10 @@ async fn drive(kind: &Fixer, cx: &RunCx) -> AiResult<Outcome> {
         }
     }
 
+    let sh = &cx.shared;
+    sh.set_phases(phases());
+    sh.set_phase(READ, PhaseStatus::Active, None, None, None);
+
     // The first compile, so the model starts from the facts.
     if can_compile {
         let started = Instant::now();
@@ -281,13 +376,32 @@ async fn drive(kind: &Fixer, cx: &RunCx) -> AiResult<Outcome> {
             if clean {
                 let (report, _) = fix_report(Some(r), tcx.build.rounds(), true);
                 let message = "The document already compiles without errors or warnings. There was nothing to fix.".to_string();
+                sh.update(|run| nothing_to_fix(&mut run.progress));
                 cx.message(&message);
                 return Ok(Outcome { message: Some(message), report: Some(report), stopped: None });
             }
+            let n = errors(r).len();
+            sh.update(|run| {
+                let p = &mut run.progress;
+                let read = match n {
+                    1 => "1 error".to_string(),
+                    n => format!("{n} errors"),
+                };
+                p.set_phase(READ, PhaseStatus::Done, Some(read), None, None);
+                p.set_phase(&round_id(1), PhaseStatus::Active, Some(errors_left(n)), None, None);
+            });
         }
         if let Some(Msg::User { content }) = spec.messages.first_mut() {
             content.push(Part::Text { text: format!("Result of the first compile_check:\n{text}") });
         }
+    }
+    if !sh.snapshot().progress.phase(READ).is_some_and(|p| p.status.is_settled()) {
+        // No compile to start from: the model reads the errors itself.
+        sh.update(|run| {
+            let p = &mut run.progress;
+            p.set_phase(READ, PhaseStatus::Done, Some("Texo couldn't compile here".into()), None, None);
+            p.set_phase(&round_id(1), PhaseStatus::Active, None, None, None);
+        });
     }
 
     let budget = spec.max_steps;
@@ -325,6 +439,8 @@ async fn drive(kind: &Fixer, cx: &RunCx) -> AiResult<Outcome> {
 
     let build = &cx.tool_cx.build;
     let (report, summary) = fix_report(build.last().as_ref(), build.rounds(), can_compile);
+    let fixed = build.last().is_some_and(|r| r.status == Status::Success);
+    sh.update(|run| finish_phases(&mut run.progress, fixed, can_compile));
     let mut message = texts.last().cloned().unwrap_or_default();
     let mut stopped = match end.end {
         LoopEnd::Finished | LoopEnd::Report => None,

@@ -45,7 +45,8 @@ fn reviewer_ensemble_runs_personas_in_parallel_and_merges_them() {
         report(json!({"summary": "Mixed reviews.", "decision": "Borderline", "mustFix": ["Close the section brace (main.tex:3)"],
             "consensus": ["Short paper"], "disagreements": ["Methods likes it, Clarity doesn't"]})),
     ]);
-    let rt = runtime(&server, Arc::new(Rec::default()), Registry::default());
+    let rec = Arc::new(Rec::default());
+    let rt = runtime(&server, rec.clone(), Registry::default());
     let mut req = request("reviewer", "Review my paper for a workshop.");
     req.options.extra = Some(json!({"review": {"venue": "generic", "reviewers": 2, "checklist": false, "groundNovelty": false}, "export": "md"}));
     let id = rt.start(root.clone(), "p".into(), req).unwrap().id;
@@ -96,6 +97,32 @@ fn reviewer_ensemble_runs_personas_in_parallel_and_merges_them() {
     assert_eq!(run.changeset[0].file, "review.md");
     assert!(run.changeset[0].new_text.as_deref().unwrap().contains("## Reviewer 2: Clarity"));
     assert!(!root.join("review.md").exists());
+
+    // Progress: reviewers done goes 0 → 1 → 2 out of 2.
+    let done: Vec<u32> = rec
+        .updates
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|u| u.progress.phase("reviewers").filter(|p| p.status != PhaseStatus::Pending).and_then(|p| p.done))
+        .collect();
+    let mut steps = done.clone();
+    steps.dedup();
+    assert_eq!(steps, [0, 1, 2], "{done:?}");
+    let phases: Vec<(&str, PhaseStatus)> = run.progress.phases.iter().map(|p| (p.id.as_str(), p.status)).collect();
+    assert_eq!(
+        phases,
+        [
+            ("checks", PhaseStatus::Skipped),
+            ("reviewers", PhaseStatus::Done),
+            ("fixpass", PhaseStatus::Done),
+            ("chair", PhaseStatus::Done),
+            ("report", PhaseStatus::Done)
+        ]
+    );
+    let reviewers = run.progress.phase("reviewers").unwrap();
+    assert_eq!((reviewers.done, reviewers.total), (Some(2), Some(2)));
+    assert_eq!(run.summary().max_steps, 40);
 }
 
 #[test]
@@ -137,6 +164,9 @@ fn rebuttal_pauses_with_the_plan_and_drafts_after_approval() {
     let id = rt.start(root.clone(), "p".into(), request("rebuttal", "Reviewer 1: There is no ablation.\nReviewer 2: Typo in the intro.")).unwrap().id;
 
     let run = wait(&rt, &root, &id, |r| r.status == RunStatus::AwaitingInput);
+    let plan = run.progress.phase("plan").unwrap();
+    assert_eq!((plan.label.as_str(), plan.status), ("Plan (needs your approval)", PhaseStatus::Active));
+    assert_eq!(run.deadline_at, None, "waiting doesn't count against the time limit");
     let awaiting = run.awaiting.clone().unwrap();
     assert_eq!(awaiting["type"], "rebuttalPlan");
     assert_eq!(awaiting["concerns"].as_array().unwrap().len(), 2);
@@ -165,6 +195,12 @@ fn rebuttal_pauses_with_the_plan_and_drafts_after_approval() {
     assert_eq!(r.data["concerns"][1]["plan"], "Fix the typo and say thanks");
     assert_eq!(r.data["warnings"], json!([]));
     assert!(fs::read_to_string(root.join("main.tex")).unwrap().contains("Hello.\n"), "nothing written before review");
+    // The concerns became the checklist: tbd is partly, changed is done.
+    let plan: Vec<PlanStatus> = run.progress.plan.iter().map(|i| i.status).collect();
+    assert_eq!(plan, [PlanStatus::Partly, PlanStatus::Done]);
+    let draft = run.progress.phase("draft").unwrap();
+    assert_eq!((draft.status, draft.done, draft.total), (PhaseStatus::Done, Some(2), Some(2)));
+    assert!(all_text(&server.recorded()[1].json()).contains("call update_plan"));
 }
 
 #[test]
@@ -258,6 +294,76 @@ fn task_agent_plans_then_reports_per_task() {
 }
 
 #[test]
+fn task_plan_becomes_a_checklist_that_update_plan_ticks_off() {
+    let (_d, root) = project();
+    let server = MockServer::start(vec![
+        text("1. Add a greeting\n2. Fix the typo in the conclusion\n3. Check the title"),
+        call("u1", "update_plan", json!({"n": 1, "status": "done", "note": "Greeting added"})),
+        text("1. done: added a greeting\n2. not done: there is no conclusion"),
+    ]);
+    let rec = Arc::new(Rec::default());
+    let rt = runtime(&server, rec.clone(), Registry::default());
+    let id = rt.start(root.clone(), "p".into(), request("task", "Add a greeting and fix the typo.")).unwrap().id;
+    let run = wait(&rt, &root, &id, finished);
+    assert_eq!(run.status, RunStatus::Done, "{:?}", run.error);
+    assert!(all_text(&server.recorded()[1].json()).contains("call update_plan"));
+
+    // After planning: the plan has the parsed tasks, all pending.
+    let updates = rec.updates.lock().unwrap().clone();
+    let planned = updates.iter().find(|u| !u.progress.plan.is_empty()).expect("the plan reached the window");
+    assert_eq!(planned.progress.plan.len(), 3);
+    assert!(planned.progress.plan.iter().all(|i| i.status == PlanStatus::Pending));
+    // update_plan changed task 1 and told the window (before the summary).
+    let ticked = updates
+        .iter()
+        .find(|u| u.progress.plan.first().is_some_and(|i| i.status == PlanStatus::Done))
+        .expect("an update after update_plan");
+    assert_eq!(ticked.progress.plan[0].note.as_deref(), Some("Greeting added"));
+    assert_eq!(ticked.progress.plan[1].status, PlanStatus::Pending);
+    let work = ticked.progress.phase("work").unwrap();
+    assert_eq!((work.status, work.done, work.total), (PhaseStatus::Active, Some(1), Some(3)));
+    let step = run.steps.iter().find(|s| s.tool.as_deref() == Some("update_plan")).unwrap();
+    assert!(step.ok && step.result.as_deref() == Some("ok"), "{step:?}");
+
+    // The end: the summary's statuses; task 3 wasn't reported and stays pending.
+    let plan: Vec<PlanStatus> = run.progress.plan.iter().map(|i| i.status).collect();
+    assert_eq!(plan, [PlanStatus::Done, PlanStatus::NotDone, PlanStatus::Pending]);
+    assert_eq!(run.progress.plan[0].note.as_deref(), Some("added a greeting"));
+    let phases: Vec<PhaseStatus> = run.progress.phases.iter().map(|p| p.status).collect();
+    assert_eq!(phases, [PhaseStatus::Done, PhaseStatus::Done, PhaseStatus::Done]);
+    assert_eq!(run.progress.phase("plan").unwrap().detail.as_deref(), Some("3 task(s)"));
+}
+
+#[test]
+fn a_task_run_stopped_mid_work_leaves_nothing_running() {
+    let (_d, root) = project();
+    let server = MockServer::start(vec![
+        text("1. Add a greeting
+2. Fix the typo"),
+        call("u1", "update_plan", json!({"n": 1, "status": "active"})),
+        text("Still thinking.").delay(10_000),
+    ]);
+    let rt = runtime(&server, Arc::new(Rec::default()), Registry::default());
+    let id = rt.start(root.clone(), "p".into(), request("task", "Add a greeting and fix the typo.")).unwrap().id;
+    let busy = wait(&rt, &root, &id, |r| r.progress.plan.first().is_some_and(|i| i.status == PlanStatus::Active));
+    assert_eq!(busy.progress.phase("work").unwrap().status, PhaseStatus::Active);
+    assert!(busy.deadline_at.is_some());
+    assert!(rt.cancel(&id));
+    let run = wait(&rt, &root, &id, finished);
+    assert_eq!(run.status, RunStatus::Cancelled);
+
+    let phases: Vec<(&str, PhaseStatus)> = run.progress.phases.iter().map(|p| (p.id.as_str(), p.status)).collect();
+    assert_eq!(phases, [("plan", PhaseStatus::Done), ("work", PhaseStatus::Skipped), ("summary", PhaseStatus::Skipped)]);
+    let plan: Vec<PlanStatus> = run.progress.plan.iter().map(|i| i.status).collect();
+    assert_eq!(plan, [PlanStatus::Skipped, PlanStatus::Pending]);
+    assert!(run.progress.activity.is_none());
+    assert_eq!(run.deadline_at, None);
+    let s = serde_json::to_value(run.summary()).unwrap();
+    assert!(s["deadlineAt"].is_null());
+    assert!(!s["progress"].to_string().contains("\"active\""), "{}", s["progress"]);
+}
+
+#[test]
 fn fixer_flags_a_cheat_fix_and_never_applies_it_automatically() {
     let (_d, root) = project();
     fs::write(root.join("main.tex"), "\\documentclass{article}\n\\begin{document}\nSee \\cite{smith}.\n\\end{document}\n").unwrap();
@@ -278,6 +384,50 @@ fn fixer_flags_a_cheat_fix_and_never_applies_it_automatically() {
     assert_eq!(run.report.as_ref().unwrap().kind, "fix");
     // An empty prompt gets the default request.
     assert!(all_text(&server.recorded()[0].json()).contains("Fix the compile errors in this project."));
+
+    // The phases: no compiler here, so one round and no check.
+    let labels: Vec<&str> = run.progress.phases.iter().map(|p| p.label.as_str()).collect();
+    assert_eq!(labels, ["Read the errors", "Fix round 1 of 3", "Fix round 2 of 3", "Fix round 3 of 3", "Compile check", "Done"]);
+    let status: Vec<PhaseStatus> = run.progress.phases.iter().map(|p| p.status).collect();
+    use PhaseStatus::*;
+    assert_eq!(status, [Done, Done, Skipped, Skipped, Skipped, Done]);
+    assert_eq!(run.summary().max_steps, 16);
+}
+
+#[test]
+fn fixer_phases_follow_the_compile_rounds() {
+    use super::kinds::fixer::{after_compile, finish_phases, nothing_to_fix, phases};
+    let apply = |p: &mut RunProgress, ups: Vec<ProgressUpdate>| {
+        for u in ups {
+            if let ProgressUpdate::Phase { id, status, detail, done, total } = u {
+                p.set_phase(&id, status, detail, done, total);
+            }
+        }
+    };
+    let mut p = RunProgress { phases: phases(), ..Default::default() };
+    p.set_phase("read", PhaseStatus::Done, None, None, None);
+    // Texo's own first compile failed with 3 errors: round 1.
+    apply(&mut p, after_compile(1, false, 3));
+    assert_eq!(p.phase("round1").unwrap().status, PhaseStatus::Active);
+    assert_eq!(p.phase("round1").unwrap().detail.as_deref(), Some("3 errors left"));
+    // The model's check still fails with 1: round 1 done, round 2 starts.
+    apply(&mut p, after_compile(2, false, 1));
+    assert_eq!(p.phase("round1").unwrap().status, PhaseStatus::Done);
+    assert_eq!(p.phase("round2").unwrap().detail.as_deref(), Some("1 error left"));
+    // Then it compiles.
+    apply(&mut p, after_compile(3, true, 0));
+    assert_eq!(p.phase("round2").unwrap().status, PhaseStatus::Done);
+    assert_eq!(p.phase("check").unwrap().status, PhaseStatus::Done);
+    finish_phases(&mut p, true, true);
+    let status: Vec<PhaseStatus> = p.phases.iter().map(|x| x.status).collect();
+    use PhaseStatus::*;
+    assert_eq!(status, [Done, Done, Done, Skipped, Done, Done]);
+
+    // Nothing to fix: every phase is skipped.
+    let mut p = RunProgress { phases: phases(), ..Default::default() };
+    p.set_phase("read", PhaseStatus::Active, None, None, None);
+    nothing_to_fix(&mut p);
+    assert!(p.phases.iter().all(|x| x.status == Skipped && x.started_at.is_none()), "{:?}", p.phases);
 }
 
 /// An environment with a vision fallback model.

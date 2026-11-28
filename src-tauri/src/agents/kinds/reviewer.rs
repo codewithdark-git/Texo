@@ -28,6 +28,7 @@ use super::{json_in_text, AgentKind, Limits, ModelRole, Outcome};
 use crate::agents::review::{checklist, venues, CheckStatus, MetaReview, Review, ReviewReport, ReviewSetup, WeaknessSeverity};
 use crate::agents::run_loop::{LoopEnd, LoopOutcome, LoopSpec, RunCx};
 use crate::agents::tools::registry::*;
+use crate::agents::types::{Phase, PhaseStatus};
 use crate::ai::error::{AiError, AiResult, Kind};
 use crate::ai::llm::{Msg, Part};
 
@@ -92,6 +93,11 @@ pub fn export_formats(extra: Option<&Value>) -> Vec<&'static str> {
     out
 }
 
+/// "Methods, Clarity": who reviews.
+fn reviewer_names(setup: &ReviewSetup) -> String {
+    setup.personas.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+}
+
 /// The tools a persona gets.
 fn persona_tools(cx: &RunCx, setup: &ReviewSetup) -> Vec<Arc<dyn Tool>> {
     let mut names: Vec<&str> = [FS_READ, &[READ_MEMORY]].concat();
@@ -113,7 +119,7 @@ fn persona_system(setup: &ReviewSetup, persona: &crate::agents::review::Persona,
     s.push_str("\n\n");
     s.push_str(&setup.rubric_prompt());
     if setup.ground_novelty {
-        s.push_str("Check whether the main idea is new with search_papers, and list the closest papers in \"references\".\n");
+        s.push_str("Check whether the main idea is new with library_search, then search_papers (paper_details reads one paper in depth), and list the closest papers in \"references\". Use verify_bibliography to check the cited references.\n");
     } else {
         s.push_str("Don't search the literature; judge novelty from the paper and what you know.\n");
     }
@@ -220,18 +226,35 @@ fn merge_references(reports: &[ReviewReport]) -> Vec<crate::agents::review::Repo
     out
 }
 
+/// The reviewer's phases: checks, reviewers, location fixes, area chair,
+/// report.
+pub fn phases() -> Vec<Phase> {
+    vec![
+        Phase::new("checks", "Automatic checks"),
+        Phase::new("reviewers", "Reviewers"),
+        Phase::new("fixpass", "Fix locations"),
+        Phase::new("chair", AREA_CHAIR),
+        Phase::new("report", "Report"),
+    ]
+}
+
 async fn drive(_kind: &Reviewer, cx: &RunCx) -> AiResult<Outcome> {
     let setup = ReviewSetup::from_extra(cx.options().extra.as_ref()).unwrap_or_default().normalized();
+    let sh = &cx.shared;
+    sh.set_phases(phases());
 
     // 1. The checklist (no AI).
     let checks = if setup.checklist {
+        sh.set_phase("checks", PhaseStatus::Active, None, None, None);
         let (root, s) = (cx.tool_cx.root.clone(), setup.clone());
         let checks = tokio::task::spawn_blocking(move || checklist::run(&root, &s)).await.unwrap_or_default();
         let fails = checks.iter().filter(|c| c.status == CheckStatus::Fail).count();
         let warns = checks.iter().filter(|c| c.status == CheckStatus::Warn).count();
         cx.message(&format!("Automatic checks: {fails} problem(s), {warns} warning(s) in {} checks.", checks.len()));
+        sh.set_phase("checks", PhaseStatus::Done, Some(format!("{fails} problem(s), {warns} warning(s)")), None, None);
         checks
     } else {
+        sh.set_phase("checks", PhaseStatus::Skipped, None, None, None);
         Vec::new()
     };
     let checks_text = if checks.is_empty() { String::new() } else { checklist::prompt_text(&checks) };
@@ -260,8 +283,17 @@ async fn drive(_kind: &Reviewer, cx: &RunCx) -> AiResult<Outcome> {
             }
         })
         .collect();
-    let outs = cx.sub_runs(specs.clone()).await;
+    let total = specs.len() as u32;
+    sh.set_phase("reviewers", PhaseStatus::Active, Some(reviewer_names(&setup)), Some(0), Some(total));
+    let mut finished = 0u32;
+    let outs = cx
+        .sub_runs_with(specs.clone(), |_| {
+            finished += 1;
+            sh.set_phase("reviewers", PhaseStatus::Active, None, Some(finished), None);
+        })
+        .await;
     cx.cancel().check()?;
+    sh.set_phase("reviewers", PhaseStatus::Done, None, Some(total), None);
 
     let mut notes: Vec<String> = Vec::new();
     let mut got: Vec<Option<(ReviewReport, LoopOutcome)>> = Vec::new();
@@ -302,7 +334,11 @@ async fn drive(_kind: &Reviewer, cx: &RunCx) -> AiResult<Outcome> {
         spec.max_steps = FIX_STEPS;
         fixes.push((i, spec));
     }
-    if !fixes.is_empty() {
+    if fixes.is_empty() {
+        sh.set_phase("fixpass", PhaseStatus::Skipped, None, None, None);
+    } else {
+        let n = fixes.len() as u32;
+        sh.set_phase("fixpass", PhaseStatus::Active, Some(format!("{n} review(s) need file and line")), Some(0), Some(n));
         let (idx, fix_specs): (Vec<usize>, Vec<LoopSpec>) = fixes.into_iter().unzip();
         for (i, out) in idx.into_iter().zip(cx.sub_runs(fix_specs).await) {
             match out {
@@ -319,6 +355,7 @@ async fn drive(_kind: &Reviewer, cx: &RunCx) -> AiResult<Outcome> {
                 Err(_) => {}
             }
         }
+        sh.set_phase("fixpass", PhaseStatus::Done, None, Some(n), None);
     }
 
     let mut reports: Vec<ReviewReport> = Vec::new();
@@ -364,6 +401,7 @@ async fn drive(_kind: &Reviewer, cx: &RunCx) -> AiResult<Outcome> {
         thinking: None,
         stream: false,
     };
+    sh.set_phase("chair", PhaseStatus::Active, None, None, None);
     let meta = match cx.sub_runs(vec![meta_spec]).await.pop() {
         Some(Err(e)) if e.kind == Kind::Cancelled => return Err(e),
         Some(Ok(o)) => meta_of(&o),
@@ -373,6 +411,8 @@ async fn drive(_kind: &Reviewer, cx: &RunCx) -> AiResult<Outcome> {
         notes.push("The area chair step didn't finish; the summary was put together by Texo.".into());
         fallback_meta(&reviews)
     });
+    sh.set_phase("chair", PhaseStatus::Done, None, None, None);
+    sh.set_phase("report", PhaseStatus::Active, None, None, None);
 
     // 4. The report.
     let mut report = ReviewReport {
@@ -402,6 +442,7 @@ async fn drive(_kind: &Reviewer, cx: &RunCx) -> AiResult<Outcome> {
         drop(o);
         cx.shared.update(|run| cx.shared.sync_changes(run));
     }
+    sh.set_phase("report", PhaseStatus::Done, None, None, None);
 
     let mut message = String::new();
     if !report.meta.decision.is_empty() {

@@ -2,6 +2,8 @@
 //! and the Tauri commands. All serde camelCase (the TS mirror is
 //! `src/lib/agentsApi.ts`).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -69,6 +71,10 @@ pub struct Step {
     /// A notice from Texo rather than text from the model.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub notice: bool,
+    /// Structured data from the tool (e.g. `{papers: [...]}`), capped by
+    /// [`cap_data`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -366,6 +372,16 @@ pub struct AgentRun {
     pub apply_commits: Vec<String>,
     #[serde(default)]
     pub options: RunOptions,
+    /// Phases, plan, the tool running now and counters (for the run card).
+    #[serde(default)]
+    pub progress: RunProgress,
+    /// The step limit of the run's main loop (kind limit or profile).
+    #[serde(default)]
+    pub max_steps: u32,
+    /// When the run's time limit ends (seconds since 1970); `None` while it
+    /// waits for the user or before it starts working.
+    #[serde(default)]
+    pub deadline_at: Option<i64>,
 }
 
 /// The run without big blobs: for lists and the `agent-run-updated` event.
@@ -394,6 +410,9 @@ pub struct RunSummary {
     pub finished_at: Option<i64>,
     pub error: Option<String>,
     pub awaiting: Option<Value>,
+    pub progress: RunProgress,
+    pub max_steps: u32,
+    pub deadline_at: Option<i64>,
 }
 
 impl AgentRun {
@@ -419,8 +438,331 @@ impl AgentRun {
             finished_at: self.finished_at,
             error: self.error.clone(),
             awaiting: self.awaiting.clone(),
+            progress: self.progress.clone(),
+            max_steps: self.max_steps,
+            deadline_at: self.deadline_at,
         }
     }
+}
+
+// ----------------------------------------------------------- progress --
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PhaseStatus {
+    #[default]
+    Pending,
+    Active,
+    Done,
+    Failed,
+    Skipped,
+}
+
+impl PhaseStatus {
+    pub fn is_settled(self) -> bool {
+        matches!(self, PhaseStatus::Done | PhaseStatus::Failed | PhaseStatus::Skipped)
+    }
+}
+
+/// One stage of a run (kind-specific, in order).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Phase {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub status: PhaseStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    /// One line, e.g. "3 errors left".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u32>,
+}
+
+impl Phase {
+    pub fn new(id: &str, label: &str) -> Phase {
+        Phase { id: id.into(), label: label.into(), ..Default::default() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanStatus {
+    #[default]
+    Pending,
+    Active,
+    Done,
+    Partly,
+    NotDone,
+    Skipped,
+}
+
+impl PlanStatus {
+    pub fn is_settled(self) -> bool {
+        !matches!(self, PlanStatus::Pending | PlanStatus::Active)
+    }
+
+    /// From loose words ("done", "not done", "in progress", …).
+    pub fn parse(word: &str) -> Option<PlanStatus> {
+        let w: String = word.trim().to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+        Some(match w.as_str() {
+            "pending" | "todo" | "open" => PlanStatus::Pending,
+            "active" | "inprogress" | "started" | "working" | "doing" => PlanStatus::Active,
+            "done" | "complete" | "completed" | "finished" => PlanStatus::Done,
+            "partly" | "partial" | "partlydone" => PlanStatus::Partly,
+            "notdone" | "failed" | "blocked" => PlanStatus::NotDone,
+            "skipped" | "skip" => PlanStatus::Skipped,
+            _ => return None,
+        })
+    }
+}
+
+/// One task of a run's plan.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanItem {
+    /// 1-based.
+    pub n: u32,
+    pub task: String,
+    #[serde(default)]
+    pub status: PlanStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceState {
+    #[default]
+    Pending,
+    Ok,
+    /// Rate limited: waiting before it tries again.
+    Waiting,
+    /// Answered partly or not at all; the others still count.
+    Degraded,
+}
+
+/// The state of one source (arXiv, Crossref …) of the tool running now.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceChip {
+    pub source: String,
+    #[serde(default)]
+    pub state: SourceState,
+    /// e.g. "14" results or "3s" to wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// The tool running right now.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    pub tool: String,
+    /// e.g. `Searching papers: "diffusion transformers"`.
+    pub label: String,
+    /// The sub-run it belongs to (e.g. a reviewer persona).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub: Option<String>,
+    /// Seconds since 1970.
+    pub started_at: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceChip>,
+    /// A line the tool streams about what it does now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Which call set it (so a parallel sub-run doesn't clear another's).
+    #[serde(skip)]
+    pub token: u64,
+}
+
+/// What a run card shows besides the steps. Kinds fill in phases and the
+/// plan; the loop sets `activity` around every tool call.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunProgress {
+    #[serde(default)]
+    pub phases: Vec<Phase>,
+    #[serde(default)]
+    pub plan: Vec<PlanItem>,
+    /// Never written to the journal (only sent to the window).
+    #[serde(default)]
+    pub activity: Option<Activity>,
+    /// e.g. papersFound, papersNew, duplicates, keysChecked.
+    #[serde(default)]
+    pub counts: BTreeMap<String, u64>,
+}
+
+/// Phases whose done/total follow the plan.
+const PLAN_PHASES: &[&str] = &["work", "draft"];
+
+impl RunProgress {
+    pub fn phase(&self, id: &str) -> Option<&Phase> {
+        self.phases.iter().find(|p| p.id == id)
+    }
+
+    /// Changes a phase (unknown ids are ignored). `None` keeps a field.
+    /// Becoming active sets `started_at`; settling sets `finished_at`;
+    /// going back to pending clears both.
+    pub fn set_phase(&mut self, id: &str, status: PhaseStatus, detail: Option<String>, done: Option<u32>, total: Option<u32>) {
+        let Some(p) = self.phases.iter_mut().find(|p| p.id == id) else { return };
+        let t = now();
+        match status {
+            PhaseStatus::Pending => {
+                p.started_at = None;
+                p.finished_at = None;
+            }
+            PhaseStatus::Active => {
+                p.started_at.get_or_insert(t);
+                p.finished_at = None;
+            }
+            _ => {
+                p.started_at.get_or_insert(t);
+                p.finished_at = Some(t);
+            }
+        }
+        p.status = status;
+        if detail.is_some() {
+            p.detail = detail;
+        }
+        if done.is_some() {
+            p.done = done;
+        }
+        if total.is_some() {
+            p.total = total;
+        }
+    }
+
+    /// Every phase not finished yet becomes `skipped` (active ones too).
+    pub fn skip_unfinished(&mut self) {
+        let ids: Vec<String> = self.phases.iter().filter(|p| !p.status.is_settled()).map(|p| p.id.clone()).collect();
+        for id in ids {
+            self.set_phase(&id, PhaseStatus::Skipped, None, None, None);
+        }
+    }
+
+    /// Every phase becomes `skipped`.
+    pub fn skip_all(&mut self) {
+        for p in &mut self.phases {
+            p.status = PhaseStatus::Skipped;
+            p.started_at = None;
+            p.finished_at = None;
+        }
+    }
+
+    /// A new plan; every task pending.
+    pub fn set_plan(&mut self, tasks: Vec<PlanItem>) {
+        self.plan = tasks;
+        self.sync_plan_phase();
+    }
+
+    /// Changes task `n`, or adds it (with `task`, else "Task n").
+    pub fn update_plan(&mut self, n: u32, status: PlanStatus, note: Option<String>, task: Option<String>) {
+        match self.plan.iter_mut().find(|i| i.n == n) {
+            Some(item) => {
+                item.status = status;
+                if note.is_some() {
+                    item.note = note;
+                }
+                if let Some(t) = task.filter(|t| !t.trim().is_empty()) {
+                    item.task = t;
+                }
+            }
+            None => {
+                let task = task.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| format!("Task {n}"));
+                self.plan.push(PlanItem { n, task, status, note });
+                self.plan.sort_by_key(|i| i.n);
+            }
+        }
+        self.sync_plan_phase();
+    }
+
+    fn sync_plan_phase(&mut self) {
+        let done = self.plan.iter().filter(|i| i.status.is_settled()).count() as u32;
+        let total = self.plan.len() as u32;
+        for p in self.phases.iter_mut().filter(|p| PLAN_PHASES.contains(&p.id.as_str())) {
+            p.done = Some(done);
+            p.total = Some(total);
+        }
+    }
+
+    pub fn count(&mut self, key: &str, by: u64) {
+        *self.counts.entry(key.to_string()).or_insert(0) += by;
+    }
+
+    /// The run ended with `status`: nothing is left running. An active
+    /// phase is done on success, failed on a failure or when Texo was
+    /// closed, skipped when the user stopped the run; phases not reached
+    /// are skipped. An active task of the plan becomes partly done, not
+    /// done or skipped the same way. The running tool is cleared.
+    pub fn settle(&mut self, status: RunStatus) {
+        let (phase, task) = match status {
+            RunStatus::Done | RunStatus::AwaitingReview => (PhaseStatus::Done, PlanStatus::Partly),
+            RunStatus::Cancelled => (PhaseStatus::Skipped, PlanStatus::Skipped),
+            RunStatus::Failed | RunStatus::Interrupted => (PhaseStatus::Failed, PlanStatus::NotDone),
+            RunStatus::Queued | RunStatus::Running | RunStatus::AwaitingInput => return,
+        };
+        let open: Vec<(String, PhaseStatus)> =
+            self.phases.iter().filter(|p| !p.status.is_settled()).map(|p| (p.id.clone(), p.status)).collect();
+        for (id, was) in open {
+            let to = if was == PhaseStatus::Active { phase } else { PhaseStatus::Skipped };
+            self.set_phase(&id, to, None, None, None);
+        }
+        let mut changed = false;
+        for item in self.plan.iter_mut().filter(|i| i.status == PlanStatus::Active) {
+            item.status = task;
+            changed = true;
+        }
+        if changed {
+            self.sync_plan_phase();
+        }
+        self.activity = None;
+    }
+}
+
+/// Progress a tool streams while it runs (through `ToolCx::progress`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProgressUpdate {
+    /// A line about what the running tool does now (not saved).
+    #[allow(dead_code)] // for the literature tools
+    Detail(String),
+    /// The state of one source of the running tool (replaces its chip; not
+    /// saved).
+    #[allow(dead_code)] // for the literature tools
+    Source(SourceChip),
+    #[allow(dead_code)] // for the literature tools
+    Count { key: String, by: u64 },
+    Phase { id: String, status: PhaseStatus, detail: Option<String>, done: Option<u32>, total: Option<u32> },
+    /// `update_plan`: task `n` (added when the plan has no such task).
+    Plan { n: u32, status: PlanStatus, note: Option<String>, task: Option<String> },
+}
+
+/// At most this many papers in a step's `data`.
+pub const MAX_DATA_PAPERS: usize = 10;
+/// Abstracts in a step's `data` are trimmed to this many characters.
+pub const MAX_DATA_ABSTRACT: usize = 300;
+
+/// A tool's structured data for the journal: at most 10 papers, abstracts
+/// trimmed to 300 characters, other long strings shortened.
+pub fn cap_data(v: &Value) -> Value {
+    let mut v = cap_args(v);
+    if let Some(papers) = v.get_mut("papers").and_then(Value::as_array_mut) {
+        papers.truncate(MAX_DATA_PAPERS);
+        for p in papers.iter_mut() {
+            if let Some(Value::String(a)) = p.get_mut("abstract") {
+                if a.chars().count() > MAX_DATA_ABSTRACT {
+                    *a = format!("{}…", a.chars().take(MAX_DATA_ABSTRACT).collect::<String>());
+                }
+            }
+        }
+    }
+    v
 }
 
 /// Payload of `agent-step`.
