@@ -4,7 +4,7 @@
 
 ![Texo: the LaTeX source on the left and the live PDF preview on the right](docs/screenshot.png)
 
-**[Download Texo 1.2 →](https://github.com/codewithdark-git/Texo/releases/latest)** for Windows and Linux.
+**[Download Texo 1.3 →](https://github.com/codewithdark-git/Texo/releases/latest)** for Windows and Linux.
 
 ## Why Texo
 
@@ -75,18 +75,27 @@
 ### AI and agents
 - **Bring your own key.** Texo ships no key and has no server: requests go from your computer to the service you choose. NVIDIA is the default and its key is free (build.nvidia.com); Claude, OpenRouter, Groq, Gemini and OpenAI-compatible services work too. Keys stay in your system's credential store.
 - **Explain & fix** in the Issues panel explains a compile error in plain words and offers a fix to check first.
-- The **AI panel** (Ctrl+Shift+A) has a **Chat** about your paper and an **Agents** tab. Agents work in the background, up to three at once:
+- **Chat, the Agents list and each background task open as editor tabs** next to your files. Write in the **AI Chat bar** under the editor (Ctrl+J): Enter sends to the Chat tab, **+** attaches files or images or picks an agent, and typing **/** lists the agents (`/fix`, `/review`, `/respond`, `/task` and your own).
+- **Ask AI** in the middle of the top bar (Ctrl+Shift+J) lists recent chats and background tasks. The sidebar footer shows each running task's progress.
+- **Fix issues** in the Issues panel hands the compile errors to the fixer agent.
+- Agents work in the background, up to three at once, and show their phases, their plan as a checklist and what they're doing right now:
   - **Fixer:** edits and compiles a private copy until the paper compiles. Fixes that only hide an error are flagged.
   - **Reviewer:** reviews like a venue's reviewers (NeurIPS, ICLR, ICML, ACL, CVPR, journals, thesis), with automatic checks, file:line for every weakness and an area-chair summary.
   - **Response to reviewers:** splits the reviews into concerns, lets you approve a plan, then drafts `response-to-reviewers.tex` and the paper changes.
   - **Task agent:** does what you describe, with files and pictures attached.
-- Agents and chat can look up papers (arXiv, Crossref, Semantic Scholar), fetch and check BibTeX, and read web pages. Web search works when you add a search service.
+- Agents and chat can look up papers (Semantic Scholar, arXiv, Crossref, and OpenAlex with a key), fetch and check BibTeX, and read web pages. Web search works when you add a search service.
 - **Nothing changes until you accept it.** Each run ends with a side-by-side review of its changes, file by file or change by change.
 - Make your own agents in **Settings → AI → Agents**, and keep per-project notes the agents read in **Settings → AI → Memory**.
 
+### Papers
+- **One paper library for all your projects,** kept on your computer. Papers you search for, save or cite, and papers the agents find, all go into it.
+- **Papers** in the sidebar footer opens it as an editor tab. Search your library as you type (offline), or search online across Semantic Scholar, arXiv and Crossref, plus OpenAlex if you add its key. Results are ranked together and duplicates are merged.
+- Each paper shows citation counts, open access and whether it's already in your project, with details, references, citations and similar papers.
+- **Add to bibliography** writes the entry to your `.bib` with an unused key, with Undo. **Check all citations** looks up each entry by DOI, arXiv id or title. Export your saved papers to BibTeX or JSON.
+
 ### History
 - Texo saves a version of your project shortly after you edit, before every compile, before every AI run and when you close it. No git install is needed, and your own git repository is never touched.
-- The **History** tab lists versions by day, with AI runs grouped. Open any file as a diff, restore a file or the whole project, undo an AI run, and add labels like "Submitted".
+- The **History** tab (next to PDF, Issues and Log) lists versions by day, with AI runs grouped. Open any file as a diff, restore a file or the whole project, undo an AI run, and add labels like "Submitted".
 - Importing a `.zip` from an online editor and working in Texo gives you this full history locally.
 
 ### Shortcuts
@@ -99,7 +108,9 @@
 | Ctrl+, | Settings |
 | Ctrl+S | Save (Texo also saves automatically) |
 | Ctrl+Enter | Compile |
-| Ctrl+Shift+A | Show or hide the AI panel |
+| Ctrl+J | Go to the AI Chat bar |
+| Ctrl+Shift+J | Ask AI: recent chats and background tasks |
+| Ctrl+Shift+A | Open the Chat tab |
 | Ctrl+W / Ctrl+Tab | Close tab / next tab |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Editor zoom in / out / reset |
 | Ctrl+Alt+J | Show the cursor's position in the PDF |
@@ -161,7 +172,7 @@ The folder still works in any other LaTeX editor.
 
 ## Support Texo
 
-Texo is free and has no ads. If it helps you, use the **Support** button (in the top bar, the dashboard sidebar, the app menu or About) to fund its development.
+Texo is free and has no ads. If it helps you, use **Support Texo** (at the bottom of the workspace sidebar, in the dashboard sidebar, the app menu or About) to fund its development.
 
 ## Roadmap
 
@@ -217,7 +228,9 @@ Pushing a `v*` tag builds both platforms in CI and attaches the installers to th
 | `src/visual/view/` | Visual mode's editor view, toolbar, input rules and popovers |
 | `src/lib/templates.tsx` | The template gallery's catalogue and thumbnails |
 | `src/lib/api.ts` | Typed wrappers for the Rust commands |
-| `src/ai/` | AI panel, chat, agents, changeset review, review report, AI settings |
+| `src/ai/` | AI tabs, the AI Chat bar, Ask AI, chat, agents and their progress, changeset review, review report, AI settings |
+| `src/library/` | The Papers tab: library search, paper cards and details, Add to bibliography |
+| `src/project/` | The Project settings dialog |
 | `src/history/` | The History tab and status bar item |
 | `src-tauri/src/project.rs` | Project folders: create, scan, rename, duplicate, saved PDF |
 | `src-tauri/src/fsops.rs` | File reads and writes, confined to the project |
@@ -231,6 +244,7 @@ Pushing a `v*` tag builds both platforms in CI and attaches the installers to th
 | `src-tauri/src/ai/` | AI providers, keys, the tool-calling LLM layer, Explain & fix |
 | `src-tauri/src/agents/` | Agent runs, overlay, tools, kinds, profiles, memory, review checklist |
 | `src-tauri/src/chat/` | Chat conversations |
+| `src-tauri/src/library/` | The paper library (SQLite): storage, full-text search, duplicates, `.bib` sync, online search |
 | `src-tauri/src/history/` | Project history (libgit2, a private repository in `.texo/history`) |
 
 ## License
