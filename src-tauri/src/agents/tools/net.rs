@@ -18,8 +18,10 @@ use reqwest::{Client, RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use super::literature::{MemoryHooks, SearchHooks, SourceSet};
 use crate::ai::error::{AiError, AiResult, Kind};
 use crate::ai::http::{self, ApiKey, Cancel};
+use crate::library::Library;
 
 /// Sent with every request: the app name and version, nothing else.
 pub const USER_AGENT: &str = concat!("Texo/", env!("CARGO_PKG_VERSION"), " (desktop LaTeX editor)");
@@ -102,8 +104,21 @@ impl SearchBackend {
 pub struct NetCtx {
     pub cancel: Cancel,
     pub services: Services,
-    /// The user's free OpenAlex key, if they added one.
+    /// The user's free OpenAlex key, if they added one. Sent as a bearer
+    /// header, never in the address.
     pub openalex_key: Option<ApiKey>,
+    /// The user's optional Semantic Scholar key (higher limits), sent in
+    /// the `x-api-key` header.
+    pub s2_key: Option<ApiKey>,
+    /// The paper sources the user left on in Settings > AI > Web.
+    pub sources: SourceSet,
+    /// Cache and progress callbacks for the paper search. In memory by
+    /// default; the paper library plugs in its own.
+    pub hooks: Arc<dyn SearchHooks>,
+    /// The paper library, when it opened: the literature tools save what
+    /// they find there and search it offline. `None`: they still work, with
+    /// the in-memory cache.
+    pub library: Option<Arc<Library>>,
     /// Sent to Crossref as `mailto` only when the user entered it.
     pub contact_email: Option<String>,
     /// `None`: no web search configured, so `web_search` isn't offered.
@@ -118,6 +133,10 @@ impl NetCtx {
             cancel,
             services: Services::default(),
             openalex_key: None,
+            s2_key: None,
+            sources: SourceSet::default(),
+            hooks: Arc::new(MemoryHooks),
+            library: None,
             contact_email: None,
             search: None,
             fetch: super::web::FetchConfig::default(),
@@ -172,17 +191,21 @@ fn next_slots() -> &'static Mutex<HashMap<String, Instant>> {
 /// Waits (cancellably) until a request to `host` may go, keeping at least
 /// `interval` between requests to the same host, also across parallel runs.
 pub async fn pace(ctx: &NetCtx, host: &str, interval: Duration) -> AiResult<()> {
-    if !ctx.services.pacing || interval.is_zero() {
-        return ctx.cancel.check();
-    }
-    let wait = {
-        let mut map = next_slots().lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        let slot = map.get(host).copied().filter(|t| *t > now).unwrap_or(now);
-        map.insert(host.to_string(), slot + interval);
-        slot.saturating_duration_since(now)
-    };
+    let wait = reserve(ctx, host, interval);
     sleep(ctx, wait).await
+}
+
+/// Takes the next slot for `host` and says how long to wait for it (zero
+/// when pacing is off). The caller sleeps; this lets it say it's waiting.
+pub fn reserve(ctx: &NetCtx, host: &str, interval: Duration) -> Duration {
+    if !ctx.services.pacing || interval.is_zero() {
+        return Duration::ZERO;
+    }
+    let mut map = next_slots().lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    let slot = map.get(host).copied().filter(|t| *t > now).unwrap_or(now);
+    map.insert(host.to_string(), slot + interval);
+    slot.saturating_duration_since(now)
 }
 
 /// A cancellable sleep.
