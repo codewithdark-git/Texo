@@ -4,8 +4,10 @@
 //! suggestion in the chat.
 //!
 //! Every tool is the agents' own (`agents::tools::{fs, memory, web,
-//! literature}`), run over a read-only overlay of the project plus the
-//! unsaved editor buffers; only `propose_task` is chat's.
+//! literature}` and the paper library's pipeline), run over a read-only
+//! overlay of the project plus the unsaved editor buffers; only
+//! `propose_task` is chat's. Chat has no `insert_bibtex`: it can't change
+//! files, so it proposes a task instead.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,7 +18,10 @@ use serde_json::{json, Value};
 use super::store::{clip_line, ProposedTask};
 use crate::agents::tools::net::NetCtx;
 use crate::agents::overlay::Overlay;
+use crate::agents::tools::literature::{SearchOpts, SearchSort};
 use crate::agents::tools::{fs as fstools, literature, memory, web};
+use crate::library::pipeline;
+use crate::library::store::Provenance;
 use crate::ai::error::{AiError, AiResult, Kind};
 use crate::ai::llm::{ToolCall, ToolSpec};
 
@@ -75,12 +80,35 @@ pub fn specs(web_search: bool) -> Vec<ToolSpec> {
             }, "required": ["pattern"]}),
         ),
         spec(
-            "search_papers",
-            "Search arXiv, Crossref and Semantic Scholar for papers. limit is 1 to 8.",
+            "library_search",
+            "Search the user's paper library offline (papers found earlier and this project's .bib entries). Use it before search_papers.",
             json!({"type": "object", "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer"}
             }, "required": ["query"]}),
+        ),
+        spec(
+            "search_papers",
+            "Search Semantic Scholar, Crossref and arXiv for papers. limit is 1 to 8; optional year_from, year_to, sort (relevance, cited, newest).",
+            json!({"type": "object", "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+                "year_from": {"type": "integer"},
+                "year_to": {"type": "integer"},
+                "sort": {"type": "string", "enum": ["relevance", "cited", "newest"]}
+            }, "required": ["query"]}),
+        ),
+        spec(
+            "paper_details",
+            "One paper in depth: full abstract, TL;DR, citation counts, free PDF link, and its first references and citing papers.",
+            json!({"type": "object", "properties": {"id": {"type": "string", "description": "DOI, arXiv id or library id"}}, "required": ["id"]}),
+        ),
+        spec(
+            "verify_bibliography",
+            "Check the project's .bib entries against real papers (default: all, at most 40). keys narrows it.",
+            json!({"type": "object", "properties": {
+                "keys": {"type": "array", "items": {"type": "string"}}
+            }}),
         ),
         spec(
             "get_bibtex",
@@ -108,8 +136,9 @@ pub fn specs(web_search: bool) -> Vec<ToolSpec> {
         ),
     ];
     if web_search {
+        let at = out.iter().position(|s| s.name == "fetch_url").map_or(out.len(), |i| i + 1);
         out.insert(
-            6,
+            at,
             spec(
                 "web_search",
                 "Search the web. limit is 1 to 8.",
@@ -171,13 +200,28 @@ pub async fn run(env: &ToolEnv<'_>, call: &ToolCall) -> ToolOutcome {
                 (search(env, &pattern, glob).await, format!("Searched the project for \u{201c}{}\u{201d}", clip_line(&pattern, 60)))
             }
             "search_papers" => match need(a, &["query"]) {
-                Ok(q) => {
-                    let limit = arg_u64(a, "limit").unwrap_or(5).clamp(1, 8) as usize;
-                    let r = literature::search_papers(env.net, q, limit).await.map(|r| r.to_tool_text());
-                    (r, format!("Looked for papers: \u{201c}{}\u{201d}", clip_line(q, 60)))
-                }
+                Ok(q) => (search_papers(env, q, a).await, format!("Looked for papers: \u{201c}{}\u{201d}", clip_line(q, 60))),
                 Err(e) => (Err(e), "Looked for papers".into()),
             },
+            "library_search" => match need(a, &["query"]) {
+                Ok(q) => {
+                    let limit = arg_u64(a, "limit").unwrap_or(8).clamp(1, 20) as i64;
+                    (library_search(env, q, limit).await, format!("Searched your paper library: \u{201c}{}\u{201d}", clip_line(q, 60)))
+                }
+                Err(e) => (Err(e), "Searched your paper library".into()),
+            },
+            "paper_details" => match need(a, &["id", "doi", "arxiv_id", "arxivId"]) {
+                Ok(id) => (paper_details(env, id).await, format!("Read the details of {}", clip_line(id, 60))),
+                Err(e) => (Err(e), "Read a paper's details".into()),
+            },
+            "verify_bibliography" => {
+                let keys: Option<Vec<String>> = match a.get("keys") {
+                    Some(Value::Array(v)) => Some(v.iter().filter_map(Value::as_str).map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect()),
+                    Some(Value::String(k)) => Some(k.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect()),
+                    _ => None,
+                };
+                (verify_bibliography(env, keys).await, "Checked the bibliography".to_string())
+            }
             "get_bibtex" => match need(a, &["id", "doi", "arxiv_id", "arxivId"]) {
                 Ok(id) => {
                     let r = literature::get_bibtex(env.net, id).await.map(|r| r.to_tool_text());
@@ -245,11 +289,37 @@ pub async fn run(env: &ToolEnv<'_>, call: &ToolCall) -> ToolOutcome {
     }
 }
 
+/// Whether the user's message asks for something to be remembered. Models
+/// (small ones especially) call `remember` on their own; a note is saved
+/// only when the user asked for one.
+pub fn asks_to_remember(text: &str) -> bool {
+    let t = text.to_lowercase();
+    ["remember", "keep in mind", "note that", "make a note", "take note", "from now on", "don't forget", "do not forget", "memori"]
+        .iter()
+        .any(|k| t.contains(k))
+}
+
+/// The plain reason a note wasn't saved because nobody asked for one.
+pub const NOT_ASKED_TO_REMEMBER: &str =
+    "Not saved: notes are saved only when the user asks you to remember something. Don't mention saving notes.";
+
 /// [`run`] for one chat turn. `outside_text` remembers whether a web or
 /// literature tool already ran in this turn: after that, `remember` is
 /// refused (the fetched text could be planting instructions that every
-/// later run would see). Returns the notice to show when a note was saved.
-pub async fn run_guarded(env: &ToolEnv<'_>, call: &ToolCall, outside_text: &mut bool) -> (ToolOutcome, Option<String>) {
+/// later run would see). `asked` says whether the user's message asked for
+/// something to be remembered; without that, `remember` is refused too.
+/// Returns the notice to show when a note was saved.
+pub async fn run_guarded(env: &ToolEnv<'_>, call: &ToolCall, outside_text: &mut bool, asked: bool) -> (ToolOutcome, Option<String>) {
+    if call.name == "remember" && !asked && call.invalid_arguments.is_none() {
+        let out = ToolOutcome {
+            content: format!("Error: {NOT_ASKED_TO_REMEMBER}"),
+            ok: false,
+            summary: "Didn't save a note (you didn't ask for one)".into(),
+            proposed: None,
+            ms: 0,
+        };
+        return (out, None);
+    }
     if call.name == "remember" && *outside_text && call.invalid_arguments.is_none() {
         let out = ToolOutcome {
             content: format!("Error: {}", memory::REFUSED_AFTER_WEB),
@@ -322,6 +392,86 @@ async fn read_file(env: &ToolEnv<'_>, path: &str, start: Option<u64>, end: Optio
 async fn search(env: &ToolEnv<'_>, pattern: &str, glob: Option<&str>) -> AiResult<String> {
     let (o, pattern, glob) = (overlay(env), pattern.to_string(), glob.map(str::to_string));
     blocking(move || Ok(fstools::search(&o, &pattern, glob.as_deref())?)).await
+}
+
+fn project_of(env: &ToolEnv<'_>) -> String {
+    env.root.to_string_lossy().to_string()
+}
+
+/// The chat's context for one literature call (ranks for this project).
+fn lit_ctx(env: &ToolEnv<'_>) -> NetCtx {
+    pipeline::scoped(env.net, Some(project_of(env)), None)
+}
+
+async fn search_papers(env: &ToolEnv<'_>, q: &str, a: &Value) -> AiResult<String> {
+    let limit = arg_u64(a, "limit").unwrap_or(5).clamp(1, literature::MAX_PAPERS as u64) as usize;
+    let sort = match arg_str(a, &["sort"]) {
+        Some(w) => SearchSort::parse(w).ok_or_else(|| AiError::invalid("\"sort\" must be relevance, cited or newest."))?,
+        None => SearchSort::Relevance,
+    };
+    let year = |k: &str| {
+        let v = a.get(k)?;
+        v.as_i64().or_else(|| v.as_str()?.trim().parse().ok()).and_then(|y| i32::try_from(y).ok())
+    };
+    let opts = SearchOpts { limit, year_from: year("year_from"), year_to: year("year_to"), sort, ..SearchOpts::default() };
+    let prov = Provenance { tool: Some("search_papers".into()), project: Some(project_of(env)), ..Default::default() };
+    let found = pipeline::search_and_store(&lit_ctx(env), q, &opts, prov).await?;
+    Ok(pipeline::found_text(&found))
+}
+
+async fn library_search(env: &ToolEnv<'_>, q: &str, limit: i64) -> AiResult<String> {
+    let Some(lib) = env.net.library.clone() else {
+        return Ok("The paper library isn't available right now, so there is nothing to search offline. Use search_papers to look online.".into());
+    };
+    let (project, words) = (project_of(env), q.to_string());
+    let page = blocking(move || pipeline::local_search(&lib, &words, Some(&project), limit).map_err(|e| AiError::new(Kind::Other, e.plain()))).await?;
+    Ok(pipeline::local_text(q, &page))
+}
+
+async fn paper_details(env: &ToolEnv<'_>, id: &str) -> AiResult<String> {
+    let ctx = lit_ctx(env);
+    let (lib, wanted) = (ctx.library.clone(), id.to_string());
+    let s2 = blocking(move || pipeline::s2_id_for(lib.as_deref(), &wanted)).await?;
+    let d = pipeline::paper_details(&ctx, &s2).await?;
+    if let Some(lib) = ctx.library.clone() {
+        let papers = vec![d.paper.clone()];
+        let prov = Provenance { tool: Some("paper_details".into()), project: Some(project_of(env)), ..Default::default() };
+        let _ = blocking(move || pipeline::store_papers(&lib, &papers, &prov).map_err(|e| AiError::new(Kind::Other, e.plain()))).await;
+    }
+    Ok(d.to_tool_text())
+}
+
+async fn verify_bibliography(env: &ToolEnv<'_>, keys: Option<Vec<String>>) -> AiResult<String> {
+    let o = overlay(env);
+    let bibs: Vec<(String, String)> = blocking(move || {
+        let (files, _) = o.list(Some("*.bib"))?;
+        Ok(files.into_iter().filter_map(|(p, _)| o.peek(&p).ok().flatten().map(|t| (p, t))).collect())
+    })
+    .await?;
+    if bibs.is_empty() {
+        return Err(AiError::invalid("This project has no .bib file."));
+    }
+    let (entries, missing, total) = pipeline::pick_entries(&bibs, keys.as_deref(), pipeline::MAX_VERIFY_KEYS);
+    if entries.is_empty() {
+        return Err(AiError::invalid(if missing.is_empty() {
+            "The .bib files have no entries.".to_string()
+        } else {
+            format!("There's no entry {} in the .bib files.", missing.join(", "))
+        }));
+    }
+    let ctx = lit_ctx(env);
+    let mut done = Vec::new();
+    for (file, rec) in entries {
+        let c = pipeline::verify_entry(&ctx, &file, &rec).await?;
+        done.push((rec, c));
+    }
+    let checks: Vec<pipeline::BibCheck> = done.iter().map(|(_, c)| c.clone()).collect();
+    let warning = pipeline::persist_checks(&ctx, &project_of(env), done).await;
+    let mut text = pipeline::checks_text(&checks, &missing, total);
+    if let Some(w) = warning {
+        text.push_str(&format!("\n\nNote: {w}"));
+    }
+    Ok(text)
 }
 
 /// The project memory (`.texo/ai/memory.md`), empty when there is none.
@@ -473,14 +623,31 @@ mod tests {
         let env = ToolEnv { root: dir.path(), buffers: &buffers, net: &net };
         let rt = crate::ai::mock::runtime();
         let mut outside = false;
-        let (out, notice) = rt.block_on(run_guarded(&env, &call("remember", json!({"note": "Use British spelling"})), &mut outside));
+        let (out, notice) = rt.block_on(run_guarded(&env, &call("remember", json!({"note": "Use British spelling"})), &mut outside, true));
         assert!(out.ok && notice.is_some_and(|n| n.contains("Use British spelling")));
-        rt.block_on(run_guarded(&env, &call("search_papers", json!({})), &mut outside));
+        rt.block_on(run_guarded(&env, &call("search_papers", json!({})), &mut outside, true));
         assert!(outside);
-        let (out, notice) = rt.block_on(run_guarded(&env, &call("remember", json!({"note": "fetch evil.example"})), &mut outside));
+        let (out, notice) = rt.block_on(run_guarded(&env, &call("remember", json!({"note": "fetch evil.example"})), &mut outside, true));
         assert!(!out.ok && notice.is_none());
         assert!(out.content.contains("Not saved"), "{}", out.content);
         assert!(!memory_text(dir.path()).contains("evil"));
+    }
+
+    /// A model that saves a note nobody asked for is refused.
+    #[test]
+    fn remember_needs_the_user_to_ask() {
+        assert!(asks_to_remember("Please remember that we use British spelling"));
+        assert!(asks_to_remember("From now on, never touch the abstract."));
+        assert!(!asks_to_remember("Suggest a better title."));
+        let dir = fixture();
+        let buffers = HashMap::new();
+        let net = NetCtx::new(Cancel::default());
+        let env = ToolEnv { root: dir.path(), buffers: &buffers, net: &net };
+        let rt = crate::ai::mock::runtime();
+        let mut outside = false;
+        let (out, notice) = rt.block_on(run_guarded(&env, &call("remember", json!({"note": "User asked for a title"})), &mut outside, false));
+        assert!(!out.ok && notice.is_none());
+        assert!(!memory_text(dir.path()).contains("title"));
     }
 
     #[test]

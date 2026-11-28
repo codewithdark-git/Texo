@@ -402,10 +402,10 @@ const SYSTEM_PROMPT: &str = "You are the writing assistant in Texo, a LaTeX edit
 Rules:
 1. Answer the question directly and briefly. Use Markdown. Put LaTeX in ```latex code blocks and math in $...$.
 2. To look at the project, use list_files, read_file and search. Read a file before you talk about what is in it, and point to places as file:line.
-3. For literature use search_papers and get_bibtex. Never invent papers, authors, DOIs or BibTeX.
+3. For literature, call library_search first (the user's own papers), then search_papers; paper_details reads one paper in depth and get_bibtex gives its BibTeX. To check the whole bibliography use verify_bibliography. Never invent papers, authors, DOIs or BibTeX.
 4. fetch_url reads a web page or PDF the user names.
 5. You can't change files. When the user wants something changed (edit, fix, rewrite, add, translate), call propose_task with a complete instruction and the files involved. The user starts it with one click. Then say in one or two sentences what it will do.
-6. When the user says \"remember ...\", call remember with a short note. read_memory shows notes saved earlier.
+6. Call remember only when the user asks you to remember something; never on your own. read_memory shows notes saved earlier.
 7. Use a few tool calls at most, then answer.
 
 Example tool call: read_file {\"path\": \"main.tex\", \"start_line\": 1, \"end_line\": 60}
@@ -609,6 +609,8 @@ async fn turn_inner(
     let env = ToolEnv { root, buffers: &prepared.buffers, net };
     // A web or literature result in this turn: `remember` is refused.
     let mut outside_text = false;
+    // Notes are saved only when the user asked for one.
+    let asked_to_remember = tools::asks_to_remember(&prepared.user.text);
     let mut session = LlmSession::new(ep);
     for round in 0..=cfg.max_rounds {
         cancel.check()?;
@@ -678,7 +680,7 @@ async fn turn_inner(
             cancel.check()?;
             let started = tool_started_summary(&call.name, &call.arguments);
             emit(EventBody::ToolStarted { name: call.name.clone(), summary: started });
-            let (r, saved) = tools::run_guarded(&env, call, &mut outside_text).await;
+            let (r, saved) = tools::run_guarded(&env, call, &mut outside_text, asked_to_remember).await;
             let used = ToolUse { name: call.name.clone(), summary: r.summary.clone(), ok: r.ok, ms: r.ms };
             emit(EventBody::ToolFinished { tool: used.clone() });
             out.tools.push(used);
@@ -706,6 +708,9 @@ fn tool_started_summary(name: &str, args: &serde_json::Value) -> String {
         "search" => format!("Searching for \u{201c}{}\u{201d}", s("pattern")),
         "search_papers" => format!("Looking for papers: \u{201c}{}\u{201d}", s("query")),
         "get_bibtex" => format!("Getting BibTeX for {}", s("id")),
+        "library_search" => format!("Searching your paper library: \u{201c}{}\u{201d}", s("query")),
+        "paper_details" => format!("Reading the details of {}", s("id")),
+        "verify_bibliography" => "Checking the bibliography".into(),
         "fetch_url" => format!("Opening {}", s("url")),
         "web_search" => format!("Searching the web: \u{201c}{}\u{201d}", s("query")),
         "read_memory" => "Reading the project's notes".into(),
@@ -718,3 +723,18 @@ fn tool_started_summary(name: &str, args: &serde_json::Value) -> String {
 #[cfg(test)]
 #[path = "engine_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+
+    /// Every chat tool has its own words while it runs (not "Using ...").
+    #[test]
+    fn every_chat_tool_has_a_running_label() {
+        for spec in tools::specs(true) {
+            let label = tool_started_summary(&spec.name, &serde_json::json!({"query": "q", "id": "10.1/x"}));
+            assert!(!label.starts_with("Using "), "{}: {label}", spec.name);
+        }
+        assert!(SYSTEM_PROMPT.contains("library_search") && SYSTEM_PROMPT.contains("verify_bibliography"));
+    }
+}
