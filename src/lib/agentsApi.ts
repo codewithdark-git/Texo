@@ -46,6 +46,130 @@ export interface Step {
   sub?: string;
   /** A notice from Texo (model switched, retrying…), not the model's words. */
   notice?: boolean;
+  /** Structured data from the tool, e.g. `{papers: [...]}` (at most 10, abstracts ≤ 300 chars). */
+  data?: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// Run progress (agents/types.rs RunProgress): phases, plan, the running tool
+// ---------------------------------------------------------------------------
+
+export type PhaseStatus = "pending" | "active" | "done" | "failed" | "skipped";
+
+/** One stage of a run, in order (kind-specific: fixer rounds, reviewers …). */
+export interface Phase {
+  id: string;
+  label: string;
+  status: PhaseStatus;
+  /** Seconds since 1970. */
+  startedAt?: number;
+  finishedAt?: number;
+  /** One line, e.g. "3 errors left". */
+  detail?: string;
+  done?: number;
+  total?: number;
+}
+
+export type PlanStatus = "pending" | "active" | "done" | "partly" | "notDone" | "skipped";
+
+export interface PlanItem {
+  /** 1-based. */
+  n: number;
+  task: string;
+  status: PlanStatus;
+  note?: string;
+}
+
+export type SourceState = "pending" | "ok" | "waiting" | "degraded";
+
+/** One source (arXiv, Crossref …) of the tool running now. */
+export interface SourceChip {
+  source: string;
+  state: SourceState;
+  /** e.g. "14" results or "3s" to wait. */
+  detail?: string;
+}
+
+/** The tool running right now (never kept in the journal). */
+export interface Activity {
+  tool: string;
+  /** e.g. `Searching papers: "diffusion transformers"`. */
+  label: string;
+  /** Sub-run label (e.g. a reviewer persona). */
+  sub?: string;
+  /** Seconds since 1970. */
+  startedAt: number;
+  sources?: SourceChip[];
+  /** A line the tool streams about what it does now. */
+  detail?: string;
+}
+
+export interface RunProgress {
+  phases: Phase[];
+  plan: PlanItem[];
+  activity: Activity | null;
+  /** e.g. papersFound, papersNew, duplicates, keysChecked. */
+  counts: Record<string, number>;
+}
+
+export const EMPTY_PROGRESS: RunProgress = { phases: [], plan: [], activity: null, counts: {} };
+
+const PHASE_STATUSES: readonly string[] = ["pending", "active", "done", "failed", "skipped"];
+const PLAN_STATUSES: readonly string[] = ["pending", "active", "done", "partly", "notDone", "skipped"];
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const optNum = (v: unknown) => v === undefined || typeof v === "number";
+const optStr = (v: unknown) => v === undefined || typeof v === "string";
+
+function isPhase(v: unknown): v is Phase {
+  return (
+    isObj(v) &&
+    typeof v.id === "string" &&
+    typeof v.label === "string" &&
+    PHASE_STATUSES.includes(v.status as string) &&
+    optNum(v.startedAt) &&
+    optNum(v.finishedAt) &&
+    optStr(v.detail) &&
+    optNum(v.done) &&
+    optNum(v.total)
+  );
+}
+
+function isPlanItem(v: unknown): v is PlanItem {
+  return isObj(v) && typeof v.n === "number" && typeof v.task === "string" && PLAN_STATUSES.includes(v.status as string) && optStr(v.note);
+}
+
+function isActivity(v: unknown): v is Activity {
+  return (
+    isObj(v) &&
+    typeof v.tool === "string" &&
+    typeof v.label === "string" &&
+    typeof v.startedAt === "number" &&
+    optStr(v.sub) &&
+    optStr(v.detail) &&
+    (v.sources === undefined || (Array.isArray(v.sources) && v.sources.every((s) => isObj(s) && typeof s.source === "string")))
+  );
+}
+
+/** A well-formed `progress` (runs from Texo 1.2 have none: use `runProgress`). */
+export function isRunProgress(v: unknown): v is RunProgress {
+  return (
+    isObj(v) &&
+    Array.isArray(v.phases) &&
+    v.phases.every(isPhase) &&
+    Array.isArray(v.plan) &&
+    v.plan.every(isPlanItem) &&
+    (v.activity === null || v.activity === undefined || isActivity(v.activity)) &&
+    isObj(v.counts) &&
+    Object.values(v.counts).every((n) => typeof n === "number")
+  );
+}
+
+/** A run's progress, or an empty one when it has none (or a malformed one). */
+export function runProgress(run: { progress?: unknown }): RunProgress {
+  const p = run.progress;
+  if (!isRunProgress(p)) return EMPTY_PROGRESS;
+  return { ...p, activity: p.activity ?? null };
 }
 
 export interface RunUsage {
@@ -215,6 +339,12 @@ export interface RunSummary {
   error: string | null;
   /** What the run waits for in `awaiting_input` (kind-specific). */
   awaiting: unknown;
+  /** Phases, plan, the running tool, counters. Texo 1.3 always sends it; read it with `runProgress`. */
+  progress?: RunProgress;
+  /** The step limit of the run's main loop (fixer 16, reviewer 40, others 24, or the profile's). */
+  maxSteps?: number;
+  /** When the run's time limit ends (seconds since 1970); null while it waits for you. */
+  deadlineAt?: number | null;
 }
 
 export interface AgentRun {
@@ -243,6 +373,9 @@ export interface AgentRun {
   startCommit: string | null;
   applyCommits: string[];
   options: RunOptions;
+  progress?: RunProgress;
+  maxSteps?: number;
+  deadlineAt?: number | null;
 }
 
 export interface ApplyResult {

@@ -73,7 +73,8 @@ vi.mock("../lib/api", () => ({
   },
 }));
 
-import { getModel, useWorkspace } from "./store";
+import { getModel, onOpenFile, useWorkspace } from "./store";
+import { showFileInFront, useAiTabs } from "../ai/tabs/aiTabsStore";
 
 const project = { id: "p1", path: "C:/papers/one", name: "One", mainDocument: "main.tex", outputPdf: null } as never;
 
@@ -109,5 +110,30 @@ describe("files rewritten outside the editor", () => {
     // Nothing to save, so B never comes back.
     await useWorkspace.getState().saveAll();
     expect(h.disk.get("main.tex")).toBe("A");
+  });
+});
+
+describe("an AI tab in front of the editor", () => {
+  it("makes way for a file asked to show, while the listener is on", async () => {
+    h.disk.set("main.tex", "x");
+    h.disk.set("refs.bib", "y");
+    await useWorkspace.getState().init(project);
+    const off = onOpenFile(showFileInFront);
+    useAiTabs.getState().open("chat");
+    await useWorkspace.getState().openFile("refs.bib");
+    expect(useAiTabs.getState().active).toBeNull();
+    expect(useAiTabs.getState().tabs).toEqual(["chat"]);
+    expect(useWorkspace.getState().active).toBe("refs.bib");
+
+    // Even the file already in front comes forward again.
+    useAiTabs.getState().activate("chat");
+    await useWorkspace.getState().openFile("refs.bib");
+    expect(useAiTabs.getState().active).toBeNull();
+
+    off();
+    useAiTabs.getState().activate("chat");
+    await useWorkspace.getState().openFile("main.tex");
+    expect(useAiTabs.getState().active).toBe("chat");
+    useAiTabs.getState().reset();
   });
 });

@@ -2,6 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLink, FlaskConical, Heart, Server, Sparkles, Star, Wrench } from "lucide-react";
 import { useUi } from "../ui";
 import { Button, Modal } from "./Dialog";
+import { Tooltip } from "./ui/Tooltip";
 
 /** The contribution section of the studio's support page. */
 export const SUPPORT_URL = "https://xcollab.pages.dev/support#contribute";
@@ -34,21 +35,33 @@ export function SupportButton() {
   );
 }
 
-/** The workspace top bar's button: a heart with "Support", icon-only when the window is narrow. */
-export function SupportTopButton() {
+/**
+ * The workspace sidebar footer's button: a heart and "Support Texo". In the
+ * folded rail (`compact`) it is the heart alone, with the label in a tooltip;
+ * either way it is always on screen.
+ */
+export function SupportFooterButton({ compact = false }: { compact?: boolean }) {
   const openDialog = useUi((s) => s.openDialog);
-  return (
+  const button = (
     <button
       type="button"
       onClick={() => openDialog("support")}
       aria-label="Support Texo"
-      title="Support Texo"
-      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 text-[13px] font-medium text-accent transition hover:border-accent/50 hover:bg-accent/20"
+      className={`flex h-8 shrink-0 items-center gap-2 rounded-md text-[13px] text-muted transition-colors hover:bg-accent/10 hover:text-accent ${
+        compact ? "w-8 justify-center" : "w-full px-2"
+      }`}
     >
-      <Heart size={14} className="fill-current" />
-      {/* The label only shows when the bar has room; the title and aria-label cover the narrow case. */}
-      <span className="hidden lg:inline">Support</span>
+      <Heart size={15} className="shrink-0" />
+      {!compact && <span className="truncate">Support Texo</span>}
     </button>
+  );
+  // The tooltip only matters when the label is hidden; the full button spans the footer.
+  return compact ? (
+    <Tooltip content="Support Texo" side="right">
+      {button}
+    </Tooltip>
+  ) : (
+    button
   );
 }
 

@@ -1,6 +1,7 @@
-//! Settings > AI > Web: the optional keys (OpenAlex, Tavily, Brave), the
-//! SearXNG address, which web search to use, and an optional contact e-mail
-//! for Crossref's polite pool.
+//! Settings > AI > Web: the optional keys (OpenAlex, Semantic Scholar,
+//! Tavily, Brave), the SearXNG address, which web search to use, an optional
+//! contact e-mail for Crossref's polite pool, and which paper sources the
+//! paper search may ask.
 //!
 //! Keys go to the same credential store as the provider keys
 //! ([`KeyStore`] service secrets) and never reach the webview: the UI only
@@ -18,6 +19,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager as _};
 
+use super::literature::SourceSet;
 use super::net::{NetCtx, SearchBackend};
 use crate::ai::error::{AiError, AiResult, Kind};
 use crate::ai::http::Cancel;
@@ -43,6 +45,8 @@ pub struct WebSettings {
     pub searxng_url: Option<String>,
     /// Sent to Crossref as `mailto` (their "polite pool"), only when set.
     pub contact_email: Option<String>,
+    /// The paper sources the search may ask (all on by default).
+    pub sources: SourceSet,
 }
 
 /// A change from the UI. Missing fields stay as they are; an empty string
@@ -54,20 +58,47 @@ pub struct WebSettingsPatch {
     pub search_provider: Option<String>,
     pub searxng_url: Option<String>,
     pub contact_email: Option<String>,
+    /// Switches for single sources; missing ones stay as they are.
+    pub sources: Option<SourcesPatch>,
+}
+
+/// A change to the paper sources: `None` leaves a source as it is.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(default)]
+pub struct SourcesPatch {
+    pub s2: Option<bool>,
+    pub crossref: Option<bool>,
+    pub arxiv: Option<bool>,
+    pub openalex: Option<bool>,
+}
+
+impl SourcesPatch {
+    fn apply(self, s: &mut SourceSet) {
+        for (from, to) in [(self.s2, &mut s.s2), (self.crossref, &mut s.crossref), (self.arxiv, &mut s.arxiv), (self.openalex, &mut s.openalex)] {
+            if let Some(on) = from {
+                *to = on;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WebToolsStatus {
     pub settings: WebSettings,
-    /// One per [`ServiceSecret`]: openalex, tavily, brave.
+    /// One per [`ServiceSecret`]: openalex, tavily, brave, semanticScholar.
     pub keys: Vec<SecretStatus>,
     /// The search the agents will use now, if any.
     pub active_search: Option<SearchProvider>,
     /// Whether the agents get the `web_search` tool.
     pub web_search_available: bool,
-    /// Whether OpenAlex joins the paper search.
+    /// Whether OpenAlex joins the paper search (a key is saved and the
+    /// source is on).
     pub openalex_enabled: bool,
+    /// Whether a Semantic Scholar key is saved (never the key itself).
+    pub s2_key: bool,
+    /// The paper sources that are on.
+    pub sources: SourceSet,
 }
 
 pub struct WebPrefs {
@@ -113,6 +144,9 @@ impl WebPrefs {
         }
         if let Some(e) = email {
             s.contact_email = e;
+        }
+        if let Some(p) = patch.sources {
+            p.apply(&mut s.sources);
         }
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
@@ -204,8 +238,11 @@ impl WebTools {
             SearchBackend::Searxng(_) => SearchProvider::Searxng,
         });
         let keys: Vec<SecretStatus> = ServiceSecret::ALL.iter().map(|s| self.keys.secret_status(*s)).collect();
-        let openalex_enabled = keys.iter().any(|k| k.secret == ServiceSecret::Openalex && k.has_key);
-        WebToolsStatus { settings, keys, active_search: active, web_search_available: active.is_some(), openalex_enabled }
+        let has = |s: ServiceSecret| keys.iter().any(|k| k.secret == s && k.has_key);
+        let openalex_enabled = has(ServiceSecret::Openalex) && settings.sources.openalex;
+        let s2_key = has(ServiceSecret::SemanticScholar);
+        let sources = settings.sources;
+        WebToolsStatus { settings, keys, active_search: active, web_search_available: active.is_some(), openalex_enabled, s2_key, sources }
     }
 
     pub fn set_key(&self, secret: ServiceSecret, key: &str) -> AiResult<WebToolsStatus> {
@@ -230,6 +267,8 @@ impl WebTools {
         let settings = self.prefs.load();
         let mut ctx = NetCtx::new(cancel);
         ctx.openalex_key = self.keys.get_secret(ServiceSecret::Openalex).map(|(k, _)| k);
+        ctx.s2_key = self.keys.get_secret(ServiceSecret::SemanticScholar).map(|(k, _)| k);
+        ctx.sources = settings.sources;
         ctx.contact_email = settings.contact_email.clone();
         ctx.search = self.search_backend(&settings);
         ctx
@@ -238,9 +277,16 @@ impl WebTools {
 
 /// Builds the tool context for one agent run (keys read off the async
 /// runtime). The agent runtime calls this when a run starts.
+/// The paper library is plugged in when it opened: the tools save what they
+/// find and their cache survives a restart.
 pub async fn net_ctx(app: &AppHandle, cancel: Cancel) -> AiResult<NetCtx> {
     let app = app.clone();
-    blocking(move || Ok(WebTools::from_app(&app)?.net_ctx(cancel))).await
+    blocking(move || {
+        let mut ctx = WebTools::from_app(&app)?.net_ctx(cancel);
+        crate::library::pipeline::attach(&mut ctx, app.try_state::<crate::library::LibraryState>().and_then(|s| s.0.clone()));
+        Ok(ctx)
+    })
+    .await
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> AiResult<T> + Send + 'static) -> AiResult<T> {
@@ -287,9 +333,12 @@ mod tests {
         let st = t.status();
         assert!(!st.web_search_available);
         assert!(!st.openalex_enabled);
-        assert_eq!(st.keys.len(), 3);
+        assert_eq!(st.keys.len(), 4);
+        assert!(!st.s2_key);
+        assert_eq!(st.sources, SourceSet::default());
         let ctx = t.net_ctx(Cancel::default());
-        assert!(ctx.search.is_none() && ctx.openalex_key.is_none() && ctx.contact_email.is_none());
+        assert!(ctx.search.is_none() && ctx.openalex_key.is_none() && ctx.s2_key.is_none() && ctx.contact_email.is_none());
+        assert_eq!(ctx.sources, SourceSet::default());
     }
 
     #[test]
@@ -336,6 +385,54 @@ mod tests {
         assert_eq!(ctx.contact_email.as_deref(), Some("me@uni.example"));
         let st = t.update(&WebSettingsPatch { contact_email: Some(String::new()), ..Default::default() }).unwrap();
         assert_eq!(st.settings.contact_email, None);
+    }
+
+    #[test]
+    fn semantic_scholar_key_and_source_switches() {
+        const S2: &str = "s2-key-0123456789abcdef";
+        const OA: &str = "oa-0123456789";
+        let dir = tempfile::tempdir().unwrap();
+        let t = tools(dir.path());
+        let st = t.set_key(ServiceSecret::SemanticScholar, S2).unwrap();
+        assert!(st.s2_key);
+        let st = t.set_key(ServiceSecret::Openalex, OA).unwrap();
+        assert!(st.openalex_enabled);
+        assert_eq!(t.net_ctx(Cancel::default()).s2_key.unwrap().expose(), S2);
+
+        let off = |p: SourcesPatch| t.update(&WebSettingsPatch { sources: Some(p), ..Default::default() }).unwrap();
+        let st = off(SourcesPatch { arxiv: Some(false), ..Default::default() });
+        assert!(!st.sources.arxiv && st.sources.s2 && st.sources.crossref && st.sources.openalex);
+        let st = off(SourcesPatch { openalex: Some(false), ..Default::default() });
+        // Still off: a patch only changes the sources it names.
+        assert!(!st.sources.arxiv && !st.sources.openalex);
+        assert!(!st.openalex_enabled, "a key alone doesn't turn a switched-off source on");
+        let ctx = t.net_ctx(Cancel::default());
+        assert!(!ctx.sources.arxiv && ctx.sources.s2);
+        // Saved to disk and read back by a fresh instance.
+        assert!(!tools(dir.path()).status().sources.arxiv);
+
+        // No key material anywhere the webview or the settings file sees.
+        let json = serde_json::to_string(&st).unwrap();
+        assert!(!json.contains(S2) && !json.contains(OA), "{json}");
+        assert!(json.contains("\"s2Key\":true") && json.contains("\"sources\":{"), "{json}");
+        let file = fs::read_to_string(dir.path().join(FILE)).unwrap();
+        assert!(!file.contains(S2) && !file.contains(OA));
+
+        let st = t.clear_key(ServiceSecret::SemanticScholar).unwrap();
+        assert!(!st.s2_key);
+        assert!(t.net_ctx(Cancel::default()).s2_key.is_none());
+    }
+
+    #[test]
+    fn old_settings_files_keep_every_source_on() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(FILE), r#"{"contactEmail":"me@uni.example"}"#).unwrap();
+        let s = WebPrefs::new(dir.path()).load();
+        assert_eq!(s.sources, SourceSet::default());
+        assert_eq!(s.contact_email.as_deref(), Some("me@uni.example"));
+        fs::write(dir.path().join(FILE), r#"{"sources":{"crossref":false}}"#).unwrap();
+        let s = WebPrefs::new(dir.path()).load();
+        assert!(!s.sources.crossref && s.sources.s2 && s.sources.arxiv && s.sources.openalex);
     }
 
     #[test]

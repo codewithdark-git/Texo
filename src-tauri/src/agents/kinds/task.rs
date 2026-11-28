@@ -20,7 +20,7 @@ use serde_json::json;
 use super::{AgentKind, Outcome};
 use crate::agents::run_loop::{LoopEnd, LoopSpec, RunCx};
 use crate::agents::tools::registry::*;
-use crate::agents::types::{one_line, Report};
+use crate::agents::types::{one_line, Phase, PhaseStatus, PlanItem, PlanStatus, Report, RunProgress};
 use crate::ai::error::AiResult;
 use crate::ai::llm::{Msg, Part};
 
@@ -66,7 +66,7 @@ impl AgentKind for Task {
     }
 
     fn tool_names(&self) -> Vec<&'static str> {
-        [FS_READ, FS_WRITE, BUILD, LITERATURE, WEB, MEMORY].concat()
+        [FS_READ, FS_WRITE, BUILD, LITERATURE, BIB_WRITE, WEB, MEMORY, PLAN].concat()
     }
 
     fn drive<'a>(&'a self, cx: &'a RunCx) -> BoxFut<'a, AiResult<Outcome>> {
@@ -144,6 +144,31 @@ pub fn parse_summary(text: &str, tasks: &[String]) -> Vec<TaskResult> {
     out
 }
 
+/// The task kind's phases: plan, work, summary.
+pub fn phases() -> Vec<Phase> {
+    vec![Phase::new("plan", "Plan"), Phase::new("work", "Work"), Phase::new("summary", "Summary")]
+}
+
+/// The plan checklist from the parsed tasks.
+pub fn plan_items(tasks: &[String]) -> Vec<PlanItem> {
+    tasks.iter().enumerate().map(|(i, t)| PlanItem { n: i as u32 + 1, task: t.clone(), ..Default::default() }).collect()
+}
+
+/// The final per-task statuses onto the plan (a task the summary doesn't
+/// mention keeps what `update_plan` gave it).
+pub fn apply_results(progress: &mut RunProgress, results: &[TaskResult]) {
+    for r in results {
+        let status = match r.status {
+            TaskStatus::Done => PlanStatus::Done,
+            TaskStatus::Partly => PlanStatus::Partly,
+            TaskStatus::NotDone => PlanStatus::NotDone,
+            TaskStatus::Unknown => continue,
+        };
+        let note = Some(r.note.clone()).filter(|n| !n.trim().is_empty());
+        progress.update_plan(r.n as u32, status, note, None);
+    }
+}
+
 fn plan_spec(kind: &Task, cx: &RunCx) -> LoopSpec {
     let mut spec = cx.default_spec(kind);
     spec.system = format!("{PLAN_PROMPT}{}", cx.system_extra);
@@ -154,6 +179,9 @@ fn plan_spec(kind: &Task, cx: &RunCx) -> LoopSpec {
 }
 
 async fn drive(kind: &Task, cx: &RunCx) -> AiResult<Outcome> {
+    let sh = &cx.shared;
+    sh.set_phases(phases());
+    sh.set_phase("plan", PhaseStatus::Active, None, None, None);
     // 1. The plan (recorded as a message step by the loop).
     let plan_out = cx.run_loop(plan_spec(kind, cx)).await?;
     let mut tasks = parse_plan(&plan_out.text);
@@ -163,17 +191,22 @@ async fn drive(kind: &Task, cx: &RunCx) -> AiResult<Outcome> {
         cx.message(&format!("Plan:\n1. {}", tasks[0]));
     }
     let plan: String = tasks.iter().enumerate().map(|(i, t)| format!("{}. {t}\n", i + 1)).collect();
+    sh.set_plan(plan_items(&tasks));
+    sh.update(|run| {
+        run.progress.set_phase("plan", PhaseStatus::Done, Some(format!("{} task(s)", tasks.len())), None, None);
+        run.progress.set_phase("work", PhaseStatus::Active, None, None, None);
+    });
 
     // 2. The work.
     let mut spec = cx.default_spec(kind);
     spec.max_steps = spec.max_steps.saturating_sub(plan_out.steps).max(1);
     spec.messages.push(Msg::Assistant { text: format!("Plan:\n{plan}"), tool_calls: Vec::new(), replay: None });
-    spec.messages.push(Msg::User {
-        content: vec![Part::Text {
-            text: "Now carry out the plan, task by task. Finish with one line per task, numbered as in the plan: \"1. done: ...\", \"2. partly: ...\" or \"3. not done: ...\"."
-                .to_string(),
-        }],
-    });
+    let mut ask = "Now carry out the plan, task by task. Finish with one line per task, numbered as in the plan: \"1. done: ...\", \"2. partly: ...\" or \"3. not done: ...\"."
+        .to_string();
+    if spec.tools.iter().any(|t| t.spec().name == UPDATE_PLAN) {
+        ask.push_str(" As you go, call update_plan with the task number: status \"active\" when you start a task, then \"done\", \"partly\" or \"notDone\".");
+    }
+    spec.messages.push(Msg::User { content: vec![Part::Text { text: ask }] });
     let out = cx.run_loop(spec).await?;
 
     // 3. The per-task summary.
@@ -182,6 +215,13 @@ async fn drive(kind: &Task, cx: &RunCx) -> AiResult<Outcome> {
         LoopEnd::Finished | LoopEnd::Report => None,
         _ => Some(out.end_message()),
     };
+    sh.update(|run| {
+        let p = &mut run.progress;
+        let work = if stopped.is_some() { PhaseStatus::Failed } else { PhaseStatus::Done };
+        p.set_phase("work", work, None, None, None);
+        apply_results(p, &results);
+        p.set_phase("summary", PhaseStatus::Done, None, None, None);
+    });
     let counts = |s: TaskStatus| results.iter().filter(|r| r.status == s).count();
     let summary = format!(
         "{} of {} task(s) done, {} partly, {} not done{}.",

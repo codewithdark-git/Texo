@@ -8,19 +8,20 @@ import { useCompile } from "../../workspace/compileStore";
 import { getModel, useWorkspace } from "../../workspace/store";
 import { dirtyBuffers } from "../chat/composerActions";
 import { useAiPanel } from "../panel/aiPanelStore";
+import { useRunFocus } from "./focusStore";
 import { useRuns } from "./runsStore";
 import { useHistory } from "../../history/historyStore";
 
 export const errorText = (e: unknown): string =>
   typeof e === "string" ? e : e instanceof Error ? e.message : typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : "Something went wrong. Try again.";
 
-/** Starts a run with the editor's unsaved text and shows it in the Agents tab. Returns the run id, or null when it couldn't start. */
+/** Starts a run with the editor's unsaved text and opens its tab. Returns the run id, or null when it couldn't start. */
 export async function startRun(project: string, request: StartRequest): Promise<string | null> {
   try {
     const run = await agentsApi.start(project, { dirtyBuffers: dirtyBuffers(), ...request });
     useRuns.getState().noteRun(run);
     useAiPanel.getState().noteRun(run);
-    useAiPanel.getState().show("agents");
+    useRunFocus.getState().focus(run.id);
     return run.id;
   } catch (e) {
     toast(errorText(e), "error");

@@ -23,6 +23,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
       ["Ctrl+W", "Close the current tab"],
       ["Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous tab"],
       ["Ctrl+Shift+F", "Search in project"],
+      ["Ctrl+Shift+B", "Fold or unfold the sidebar (also Ctrl+B outside the editor)"],
       ["Ctrl+,", "Settings"],
       ["Ctrl+N", "New project (Dashboard)"],
       ["Ctrl+O", "Open a folder (Dashboard)"],
@@ -52,6 +53,15 @@ const SHORTCUTS: [string, [string, string][]][] = [
       ['"# ", "- ", "1. ", "**text**", "$x$"', "Markdown-style shortcuts"],
       ["/", "Insert menu"],
       ["Ctrl+F / Ctrl+H", "Find / replace"],
+    ],
+  ],
+  [
+    "AI",
+    [
+      ["Ctrl+J", "Go to the AI Chat bar under the editor"],
+      ["Ctrl+Shift+J", "Ask AI: recent chats and background tasks"],
+      ["Ctrl+Shift+A", "Open the Chat tab"],
+      ["/ (in the AI Chat bar)", "Start an agent: /fix, /review, /respond, /task"],
     ],
   ],
   [

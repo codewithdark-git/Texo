@@ -39,12 +39,14 @@ export interface ReviewSetupDialogProps {
   project: string;
   /** Start from this reviewer profile (default: the built-in "Reviewer (generic)"). */
   initialProfileId?: string | null;
+  /** Words for the Focus field (e.g. typed in the AI Chat bar); the profile's own focus is kept when empty. */
+  initialFocus?: string;
   onClose: () => void;
   /** Called after the run was started (the dialog closes itself). */
   onStarted?: (run: RunSummary) => void;
 }
 
-export function ReviewSetupDialog({ project, initialProfileId, onClose, onStarted }: ReviewSetupDialogProps) {
+export function ReviewSetupDialog({ project, initialProfileId, initialFocus, onClose, onStarted }: ReviewSetupDialogProps) {
   const [presets, setPresets] = useState<VenuePreset[] | null>(null);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [profileId, setProfileId] = useState<string>(initialProfileId || "reviewer");
@@ -67,14 +69,16 @@ export function ReviewSetupDialog({ project, initialProfileId, onClose, onStarte
         setPresets(ps);
         setProfiles(reviewers);
         setProfileId(start?.id ?? "");
-        setSetup(completeSetup(start?.review, ps));
+        const base = completeSetup(start?.review, ps);
+        const words = initialFocus?.trim();
+        setSetup(words ? { ...base, focus: words } : base);
       },
       (err) => live && setLoadError(errorText(err)),
     );
     return () => {
       live = false;
     };
-  }, [project, initialProfileId]);
+  }, [project, initialProfileId, initialFocus]);
 
   const profile = profiles.find((p) => p.id === profileId) ?? null;
   const preset = presets && setup ? findPreset(presets, setup.venue) : undefined;

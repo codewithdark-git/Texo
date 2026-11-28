@@ -1,20 +1,24 @@
-// Settings > AI > Web: optional keys for OpenAlex (paper search) and Tavily
-// or Brave (web search), a SearXNG address, which search to use, and an
-// optional contact e-mail for Crossref. Keys go straight to the system's
+// Settings > AI > Web: which paper sources to search, optional keys for
+// OpenAlex and Semantic Scholar (paper search) and Tavily or Brave (web
+// search), a SearXNG address, which search to use, and an optional contact
+// e-mail for Crossref. Keys go straight to the system's
 // password store in Rust; this page only learns whether one is saved.
 
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CheckCircle2, ExternalLink, Loader2, ShieldAlert, Trash2 } from "lucide-react";
 import { Button } from "../../components/Dialog";
-import { Heading } from "../../components/settingsControls";
+import { Heading, Row, Toggle } from "../../components/settingsControls";
 import { errorText } from "../../lib/api";
 import {
+  PAPER_SOURCES,
   SEARCH_LABELS,
+  SOURCE_LABELS,
   SERVICE_KEY_URLS,
   SERVICE_LABELS,
   webToolsApi,
   webToolsSummary,
+  type PaperSource,
   type SearchProvider,
   type SecretStatus,
   type ServiceSecret,
@@ -23,10 +27,18 @@ import {
 import { toast } from "../../ui";
 import { searxngProblem } from "./agentSettingsLogic";
 
+const SOURCE_HELP: Record<PaperSource, string> = {
+  s2: "Abstracts, summaries and citation counts.",
+  crossref: "Published journal and conference papers.",
+  arxiv: "Preprints, with free PDFs.",
+  openalex: "A large open index of scholarly works.",
+};
+
 const INPUT = "h-8 w-full rounded-lg border border-border bg-bg px-2.5 text-sm outline-none focus:border-accent";
 
 const KEY_HELP: Record<ServiceSecret, string> = {
   openalex: "Adds OpenAlex to the paper search. Free key; paper search works without it.",
+  semanticScholar: "Raises Semantic Scholar's limits, so searches are busy less often. Paper search works without it.",
   tavily: "Lets agents search the web. Free tier available.",
   brave: "Lets agents search the web. Free tier available.",
 };
@@ -65,7 +77,10 @@ export function WebSettings() {
       <Heading>Web and literature</Heading>
       <p className="mb-2 rounded-lg border border-border bg-bg px-3 py-2 text-xs text-muted">{webToolsSummary(status)}</p>
 
+      <PaperSources status={status} onStatus={setStatus} />
+
       <ServiceKey status={keyOf("openalex")} onStatus={setStatus} />
+      <ServiceKey status={keyOf("semanticScholar")} onStatus={setStatus} />
       <ServiceKey status={keyOf("tavily")} onStatus={setStatus} />
       <ServiceKey status={keyOf("brave")} onStatus={setStatus} />
       <TextSetting
@@ -115,6 +130,37 @@ export function WebSettings() {
         onSave={async (contactEmail) => setStatus(await webToolsApi.update({ contactEmail }))}
       />
     </>
+  );
+}
+
+/** On/off switches for the paper sources. OpenAlex also needs its key. */
+function PaperSources({ status, onStatus }: { status: WebToolsStatus; onStatus: (s: WebToolsStatus) => void }) {
+  const [busy, setBusy] = useState(false);
+  const hasOpenalexKey = status.keys.some((k) => k.secret === "openalex" && k.hasKey);
+  const set = async (source: PaperSource, on: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      onStatus(await webToolsApi.update({ sources: { [source]: on } }));
+    } catch (err) {
+      toast(errorText(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mb-2 border-b border-border pb-2">
+      <div className="pt-1 text-sm">Paper sources</div>
+      {PAPER_SOURCES.map((p) => (
+        <Row
+          key={p}
+          label={SOURCE_LABELS[p]}
+          help={p === "openalex" && !hasOpenalexKey ? "Needs a free key (below) to join the search." : SOURCE_HELP[p]}
+        >
+          <Toggle label={`Search ${SOURCE_LABELS[p]}`} checked={status.sources[p] ?? true} onChange={(on) => void set(p, on)} />
+        </Row>
+      ))}
+    </div>
   );
 }
 

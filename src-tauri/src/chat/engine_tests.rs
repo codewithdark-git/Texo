@@ -235,8 +235,13 @@ fn cancel_keeps_the_partial_answer() {
     let dir = project();
     let cancel = Cancel::default();
     let c2 = cancel.clone();
+    let seen = server.requests.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
+        // Stop once the stream has started (a fixed delay raced the first chunk on a busy machine).
+        while seen.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(150));
         c2.cancel();
     });
     let start = std::time::Instant::now();

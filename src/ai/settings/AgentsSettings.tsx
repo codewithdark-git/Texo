@@ -121,7 +121,7 @@ export function AgentsSettings({ provider }: { provider: AiProviderInfo }) {
       <Heading>Profiles</Heading>
       <p className="mb-2 text-xs text-muted">
         A profile is an agent set up your way: its instructions, model and tools. Built-in profiles can be changed and reset. Your own profiles
-        show in the AI panel's New task menu.
+        show in the AI Chat bar (+, then Agents, or type /) and in the Agents tab's New task menu.
       </p>
       <ul className="divide-y divide-border rounded-lg border border-border">
         {view.profiles.map((p) => (
@@ -393,7 +393,7 @@ function ProfileEditor({
 
       {draft.kind === "reviewer" && (
         <p className="text-xs text-muted">
-          To change the venue, reviewers and strictness, open Review paper… in the AI panel, adjust the setup and save it as a profile.
+          To change the venue, reviewers and strictness, open Review paper… from the Agents tab or type /review in the AI Chat bar, adjust the setup and save it as a profile.
         </p>
       )}
 

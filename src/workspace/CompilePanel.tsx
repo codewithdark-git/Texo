@@ -1,21 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { AlertCircle, AlertTriangle, ExternalLink, Info, Lightbulb, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
-import { SHOW_PDF_EVENT, type Issue, type Severity } from "../lib/api";
-import { ExplainIssueButton, FixAllButton } from "../ai/AiButtons";
-import { FixerAgentButton } from "../ai/agents/FixerButton";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ExternalLink,
+  FileText,
+  History as HistoryIcon,
+  Info,
+  Lightbulb,
+  Loader2,
+  RefreshCw,
+  ScrollText,
+  ShieldAlert,
+} from "lucide-react";
+import type { Issue, Severity } from "../lib/api";
+import { ExplainIssueButton, FixIssuesButton } from "../ai/AiButtons";
 import { Button } from "../components/Dialog";
+import { Tabs, TabPanel, panelId, tabId, type TabItem } from "../components/ui/Tabs";
+import { HistoryPanel } from "../history/HistoryPanel";
 import { bibtexBackendEdit, parseHint } from "../editor/biblatexFix";
 import { toast } from "../ui";
 import { useCompile } from "./compileStore";
 import { consequenceSummary, groupIssues } from "./diagnostics";
 import { InstallPackageFix } from "./InstallPackageFix";
+import { COMPILE_TABS, useLayout, type RightTab } from "./layoutStore";
 import { revealSource } from "./EditorPane";
 import { ENGINE_NAMES } from "./CompileControls";
 import { PdfViewer } from "./PdfViewer";
 import { getModel, useWorkspace } from "./store";
 
-type Tab = "pdf" | "issues" | "log";
+/** Below this width the tabs show icons only, with the label in a tooltip. */
+const LABELS_MIN = 300;
+const ID = "right";
 type Filter = "all" | "error" | "warning" | "badbox";
 
 const ICONS: Record<Severity, { icon: typeof AlertCircle; className: string }> = {
@@ -86,11 +102,30 @@ function Hint({ hint }: { hint: string }) {
   );
 }
 
-/** The right-hand pane: the PDF, the compile issues, and the logs. */
-export function CompilePanel() {
+/** Whether `el` is narrower than `min`, followed as it resizes. */
+function useNarrow(el: RefObject<HTMLElement | null>, min: number): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const node = el.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setNarrow(node.clientWidth < min));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [el, min]);
+  return narrow;
+}
+
+/** The right-hand pane: the PDF, the compile issues, the logs and the project's history. */
+export function CompilePanel({ project }: { project: string }) {
   const c = useCompile();
   const engine = useWorkspace((s) => s.project?.engine ?? "pdflatex");
-  const [tab, setTab] = useState<Tab>("pdf");
+  const tab = useLayout((s) => s.rightTab);
+  const setTab = useLayout((s) => s.setRightTab);
+  const root = useRef<HTMLDivElement>(null);
+  const narrow = useNarrow(root, LABELS_MIN);
+  // History mounts on first view, then stay mounted so their scroll and inputs survive.
+  const [visited, setVisited] = useState<Partial<Record<RightTab, true>>>(() => ({ [useLayout.getState().rightTab]: true }));
+  useEffect(() => setVisited((v) => (v[tab] ? v : { ...v, [tab]: true })), [tab]);
   const [filter, setFilter] = useState<Filter>("all");
   const [showTexLog, setShowTexLog] = useState(false);
   const logEnd = useRef<HTMLDivElement>(null);
@@ -107,21 +142,16 @@ export function CompilePanel() {
   const shown = filter === "all" ? issues : issues.filter((i) => i.severity === filter);
 
   // Show the issues when a compile produced no PDF, and the PDF again once it works.
+  // History is never switched away from (see autoTabAfterCompile).
   const lastResult = useRef(c.result);
   useEffect(() => {
     if (!c.result || c.result === lastResult.current) return;
     lastResult.current = c.result;
     // A PDF left from an earlier compile doesn't help when TeX stopped on an error.
     const stopped = c.result.status === "failed" && c.result.issues.some((i) => i.fatal);
-    if ((!c.result.pdfPath || stopped) && c.result.status !== "aborted") setTab("issues");
-    else if (c.result.status === "success") setTab((t) => (t === "issues" ? "pdf" : t));
+    if ((!c.result.pdfPath || stopped) && c.result.status !== "aborted") useLayout.getState().afterCompile("failed");
+    else if (c.result.status === "success") useLayout.getState().afterCompile("success");
   }, [c.result]);
-
-  useEffect(() => {
-    const show = () => setTab("pdf");
-    window.addEventListener(SHOW_PDF_EVENT, show);
-    return () => window.removeEventListener(SHOW_PDF_EVENT, show);
-  }, []);
 
   // Follow the live output while compiling.
   useEffect(() => {
@@ -130,23 +160,30 @@ export function CompilePanel() {
 
   const status = c.result?.status;
   const noEngine = status === "noEngine" || (c.toolchains && !c.result && !c.compiling && !hasAnyEngine(c.toolchains));
+  const compileTab = COMPILE_TABS.includes(tab);
+  const errorDot = counts.error > 0 && <span aria-hidden="true" className="inline-block size-1.5 shrink-0 rounded-full bg-danger" />;
+  const tabs: TabItem<RightTab>[] = [
+    { id: "pdf", label: "PDF", icon: <FileText size={14} /> },
+    {
+      id: "issues",
+      label: `Issues${issues.length ? ` (${issues.length})` : ""}`,
+      icon: (
+        <span className="relative flex">
+          <AlertCircle size={14} />
+          {narrow && counts.error > 0 && <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-danger" />}
+        </span>
+      ),
+      badge: errorDot,
+    },
+    { id: "log", label: "Log", icon: <ScrollText size={14} /> },
+    { id: "history", label: "History", icon: <HistoryIcon size={14} /> },
+  ];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={root} className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2 text-[13px]">
-        {(["pdf", "issues", "log"] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            aria-pressed={tab === t}
-            onClick={() => setTab(t)}
-            className={`rounded-md px-2.5 py-1 ${tab === t ? "bg-surface-2 text-text" : "text-muted hover:text-text"}`}
-          >
-            {t === "pdf" ? "PDF" : t === "issues" ? `Issues${issues.length ? ` (${issues.length})` : ""}` : "Log"}
-            {t === "issues" && counts.error > 0 && <span className="ml-1.5 inline-block size-1.5 rounded-full bg-danger align-middle" />}
-          </button>
-        ))}
-        <span className="ml-auto truncate pr-1 text-xs text-muted">
+        <Tabs label="Preview panel" idPrefix={ID} items={tabs} value={tab} onChange={setTab} iconOnly={narrow} className="shrink-0" />
+        <span className={`ml-auto min-w-0 truncate pr-1 text-xs text-muted ${compileTab ? "" : "hidden"}`}>
           {c.compiling ? (
             <span className="inline-flex items-center gap-1.5">
               <Loader2 size={12} className="animate-spin" /> Compiling with {ENGINE_NAMES[engine]}…
@@ -159,26 +196,32 @@ export function CompilePanel() {
         </span>
       </div>
 
-      {c.error && <p className="border-b border-danger/40 bg-danger/10 px-3 py-2 text-sm">{c.error}</p>}
+      {compileTab && c.error && <p className="border-b border-danger/40 bg-danger/10 px-3 py-2 text-sm">{c.error}</p>}
 
-      {noEngine ? (
+      {!compileTab ? null : noEngine ? (
         <NoEngine />
       ) : status === "noMainDocument" ? (
         <Empty text="There's no main document to compile. Right-click a .tex file and choose “Set as main document”." />
       ) : null}
 
       {/* The viewer stays mounted so its zoom and scroll survive tab switches. */}
-      <div className={tab === "pdf" && !noEngine && status !== "noMainDocument" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+      <div
+        id={panelId(ID, "pdf")}
+        role="tabpanel"
+        aria-labelledby={tabId(ID, "pdf")}
+        className={tab === "pdf" && !noEngine && status !== "noMainDocument" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
+      >
         {c.result?.rcIgnored && <TrustBanner onTrust={() => void c.trust()} />}
         <PdfViewer />
       </div>
 
-      {noEngine || status === "noMainDocument" || tab === "pdf" ? null : tab === "issues" ? (
-        <div className="min-h-0 flex-1 overflow-auto">
+      {!compileTab || noEngine || status === "noMainDocument" || tab === "pdf" ? null : tab === "issues" ? (
+        <div id={panelId(ID, "issues")} role="tabpanel" aria-labelledby={tabId(ID, "issues")} className="min-h-0 flex-1 overflow-auto">
           {c.result?.rcIgnored && <TrustBanner onTrust={() => void c.trust()} />}
           {c.result?.hints.map((h) => <Hint key={h} hint={h} />)}
           {(issues.length > 0 || status === "failed") && (
-            <div className="flex flex-wrap gap-1 px-3 pt-3 pb-1 text-xs">
+            // Sticky, so "Fix issues" stays in reach from every scroll position.
+            <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 bg-[color-mix(in_srgb,var(--surface-2)_40%,var(--bg))] px-3 pt-3 pb-2 text-xs">
               {issues.length > 0 && (
                 [
                   ["all", `All ${issues.length}`],
@@ -199,8 +242,9 @@ export function CompilePanel() {
                   {label}
                 </button>
               ))}
-              {(counts.error > 0 || status === "failed") && !c.compiling && <FixAllButton />}
-              {(counts.error > 0 || status === "failed") && !c.compiling && <FixerAgentButton />}
+              <span className="ml-auto flex shrink-0 items-center">
+                <FixIssuesButton project={project} counts={counts} status={c.compiling ? "compiling" : status} />
+              </span>
             </div>
           )}
           <IssueList issues={shown} />
@@ -210,7 +254,7 @@ export function CompilePanel() {
           {!c.result && !c.compiling && <Empty text="Press Compile (Ctrl+Enter) to build the PDF." />}
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div id={panelId(ID, "log")} role="tabpanel" aria-labelledby={tabId(ID, "log")} className="flex min-h-0 flex-1 flex-col">
           <label className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted">
             <input type="checkbox" checked={showTexLog} onChange={(e) => setShowTexLog(e.target.checked)} />
             Show the full TeX log file instead of console output
@@ -220,6 +264,12 @@ export function CompilePanel() {
             <div ref={logEnd} />
           </pre>
         </div>
+      )}
+
+      {visited.history && (
+        <TabPanel idPrefix={ID} id="history" active={tab === "history"} className="flex min-h-0 flex-1 flex-col">
+          <HistoryPanel />
+        </TabPanel>
       )}
     </div>
   );

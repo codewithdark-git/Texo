@@ -12,21 +12,26 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use crate::agents::overlay::Overlay;
-use crate::agents::types::{one_line, Report};
+use crate::agents::types::{one_line, PlanStatus, ProgressUpdate, Report};
+use crate::library::pipeline;
+use crate::library::store::Provenance;
 use crate::ai::http::Cancel;
 use crate::ai::llm::ToolSpec;
 
 use super::build::{self, BuildState};
+use super::literature::{SearchOpts, SearchSort, SourceEvent};
 use super::net::NetCtx;
 use super::{fs as fstools, literature, memory, web};
 
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Where a tool sends progress while it runs (the run's card).
+pub type ProgressFn = Arc<dyn Fn(ProgressUpdate) + Send + Sync>;
+
 /// What a tool call has to work with. Cheap to clone.
 #[derive(Clone)]
 pub struct ToolCx {
     pub root: PathBuf,
-    #[allow(dead_code)] // for kinds' own tools
     pub run_id: String,
     pub kind: String,
     pub overlay: Arc<Mutex<Overlay>>,
@@ -34,11 +39,21 @@ pub struct ToolCx {
     /// `None`: no web or literature tools in this run.
     pub net: Option<NetCtx>,
     pub cancel: Cancel,
+    /// `None`: nobody shows progress (tests, chat).
+    pub progress: Option<ProgressFn>,
 }
 
 impl ToolCx {
     pub fn overlay(&self) -> std::sync::MutexGuard<'_, Overlay> {
         self.overlay.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Sends sub-progress of the running tool (per-source chips, a detail
+    /// line, phases, counts). Does nothing without a listener.
+    pub fn progress(&self, update: ProgressUpdate) {
+        if let Some(f) = &self.progress {
+            f(update);
+        }
     }
 }
 
@@ -57,15 +72,23 @@ pub struct ToolOutput {
     /// One line for the step list.
     pub summary: String,
     pub control: Option<Control>,
+    /// Structured data for the run card (e.g. `{papers: [...]}`); kept in
+    /// the step, capped. Never sent to the model. (Boxed: keeps the
+    /// output small.)
+    pub data: Option<Box<Value>>,
 }
 
 impl ToolOutput {
     pub fn ok(content: impl Into<String>, summary: impl Into<String>) -> Self {
-        ToolOutput { content: content.into(), ok: true, summary: summary.into(), control: None }
+        ToolOutput { content: content.into(), ok: true, summary: summary.into(), control: None, data: None }
     }
     pub fn err(message: impl Into<String>) -> Self {
         let m = message.into();
-        ToolOutput { summary: one_line(&m, 160), content: format!("Error: {m}"), ok: false, control: None }
+        ToolOutput { summary: one_line(&m, 160), content: format!("Error: {m}"), ok: false, control: None, data: None }
+    }
+    pub fn with_data(mut self, data: Value) -> Self {
+        self.data = Some(Box::new(data));
+        self
     }
 }
 
@@ -96,39 +119,53 @@ pub const WEB_SEARCH: &str = "web_search";
 pub const READ_MEMORY: &str = "read_memory";
 pub const REMEMBER: &str = "remember";
 pub const SUBMIT_REPORT: &str = "submit_report";
+pub const UPDATE_PLAN: &str = "update_plan";
+pub const LIBRARY_SEARCH: &str = "library_search";
+pub const PAPER_DETAILS: &str = "paper_details";
+pub const VERIFY_BIBLIOGRAPHY: &str = "verify_bibliography";
+pub const INSERT_BIBTEX: &str = "insert_bibtex";
 
 pub const FS_READ: &[&str] = &[LIST_FILES, READ_FILE, SEARCH];
 pub const FS_WRITE: &[&str] = &[EDIT_FILE, WRITE_FILE, DELETE_FILE];
 pub const BUILD: &[&str] = &[COMPILE_CHECK, EXPLAIN_LOG];
-pub const LITERATURE: &[&str] = &[SEARCH_PAPERS, GET_BIBTEX, VERIFY_CITATION];
+pub const LITERATURE: &[&str] = &[SEARCH_PAPERS, GET_BIBTEX, VERIFY_CITATION, LIBRARY_SEARCH, PAPER_DETAILS, VERIFY_BIBLIOGRAPHY];
+/// Adds BibTeX to a `.bib` file through the overlay: only for kinds that
+/// may change files (it is left out otherwise, see [`tools_by_name`]).
+pub const BIB_WRITE: &[&str] = &[INSERT_BIBTEX];
 pub const WEB: &[&str] = &[FETCH_URL, WEB_SEARCH];
 pub const MEMORY: &[&str] = &[READ_MEMORY, REMEMBER];
 pub const REPORT: &[&str] = &[SUBMIT_REPORT];
+pub const PLAN: &[&str] = &[UPDATE_PLAN];
 
 /// Tools whose results are text from outside the project (web pages, paper
 /// metadata and abstracts) that could carry planted instructions. After one
 /// of them ran, `remember` is refused for the rest of the run (or chat turn).
 pub fn brings_outside_text(name: &str) -> bool {
-    LITERATURE.contains(&name) || WEB.contains(&name)
+    LITERATURE.contains(&name) || BIB_WRITE.contains(&name) || WEB.contains(&name)
 }
 
 /// Every built-in tool name.
 #[allow(dead_code)] // for the profiles editor
 pub fn all_names() -> Vec<&'static str> {
-    [FS_READ, FS_WRITE, BUILD, LITERATURE, WEB, MEMORY, REPORT].concat()
+    [FS_READ, FS_WRITE, BUILD, LITERATURE, BIB_WRITE, WEB, MEMORY, REPORT, PLAN].concat()
 }
 
 /// The built-in tools named in `names` (unknown names skipped). Web and
-/// literature tools need `net`; `web_search` only when one is configured.
+/// literature tools need `net`; `web_search` only when one is configured;
+/// `insert_bibtex` only next to a tool that changes files.
 pub fn tools_by_name(names: &[&str], net: Option<&NetCtx>) -> Vec<Arc<dyn Tool>> {
     let mut out: Vec<Arc<dyn Tool>> = Vec::new();
+    let writes = names.iter().any(|n| FS_WRITE.contains(n));
     for name in names {
         let Some(b) = Builtin::from_name(name) else { continue };
         if out.iter().any(|t| t.spec().name == *name) {
             continue;
         }
-        let needs_net = LITERATURE.contains(name) || WEB.contains(name);
+        let needs_net = LITERATURE.contains(name) || BIB_WRITE.contains(name) || WEB.contains(name);
         if needs_net && net.is_none() {
+            continue;
+        }
+        if BIB_WRITE.contains(name) && !writes {
             continue;
         }
         if *name == WEB_SEARCH && !net.is_some_and(NetCtx::web_search_available) {
@@ -159,6 +196,11 @@ pub enum Builtin {
     ReadMemory,
     Remember,
     SubmitReport,
+    UpdatePlan,
+    LibrarySearch,
+    PaperDetails,
+    VerifyBibliography,
+    InsertBibtex,
 }
 
 fn schema(props: Value, required: &[&str]) -> Value {
@@ -175,6 +217,22 @@ fn s(args: &Value, k: &str) -> Option<String> {
 
 fn n(args: &Value, k: &str) -> Option<u64> {
     args.get(k).and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+}
+
+/// A whole number that may be negative or sent as text (a year).
+fn int(args: &Value, k: &str) -> Option<i64> {
+    args.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+}
+
+/// A list of strings, or one comma-separated string.
+fn strings(args: &Value, k: &str) -> Option<Vec<String>> {
+    let list: Vec<String> = match args.get(k)? {
+        Value::Array(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        Value::String(s) => s.split(',').map(str::to_string).collect(),
+        _ => return None,
+    };
+    let list: Vec<String> = list.into_iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+    (!list.is_empty()).then_some(list)
 }
 
 fn need(args: &Value, k: &str) -> Result<String, ToolOutput> {
@@ -201,6 +259,11 @@ impl Builtin {
             READ_MEMORY => ReadMemory,
             REMEMBER => Remember,
             SUBMIT_REPORT => SubmitReport,
+            UPDATE_PLAN => UpdatePlan,
+            LIBRARY_SEARCH => LibrarySearch,
+            PAPER_DETAILS => PaperDetails,
+            VERIFY_BIBLIOGRAPHY => VerifyBibliography,
+            INSERT_BIBTEX => InsertBibtex,
             _ => return None,
         })
     }
@@ -224,6 +287,11 @@ impl Builtin {
             ReadMemory => READ_MEMORY,
             Remember => REMEMBER,
             SubmitReport => SUBMIT_REPORT,
+            UpdatePlan => UPDATE_PLAN,
+            LibrarySearch => LIBRARY_SEARCH,
+            PaperDetails => PAPER_DETAILS,
+            VerifyBibliography => VERIFY_BIBLIOGRAPHY,
+            InsertBibtex => INSERT_BIBTEX,
         }
     }
 
@@ -262,8 +330,33 @@ impl Builtin {
                 schema(json!({"issue_index": {"type": "integer"}}), &[]),
             ),
             SearchPapers => (
-                "Search arXiv, Crossref and Semantic Scholar for papers. Returns title, authors, year, venue, DOI, arXiv id.",
-                schema(json!({"query": {"type": "string"}, "limit": {"type": "integer", "description": "1-8"}}), &["query"]),
+                "Search Semantic Scholar, Crossref and arXiv for papers. Returns title, authors, year, venue, DOI, arXiv id, citations.",
+                schema(
+                    json!({"query": {"type": "string"}, "limit": {"type": "integer", "description": "1-8"},
+                        "year_from": {"type": "integer"}, "year_to": {"type": "integer"},
+                        "sort": {"type": "string", "enum": ["relevance", "cited", "newest"]}}),
+                    &["query"],
+                ),
+            ),
+            LibrarySearch => (
+                "Search the user's paper library offline (papers found earlier and this project's .bib entries). Use it before search_papers.",
+                schema(json!({"query": {"type": "string"}, "limit": {"type": "integer", "description": "1-20"}}), &["query"]),
+            ),
+            PaperDetails => (
+                "One paper in depth: full abstract, TL;DR, citation counts, free PDF link, and its first references and citing papers.",
+                schema(json!({"id": {"type": "string", "description": "DOI, arXiv id or library id"}}), &["id"]),
+            ),
+            VerifyBibliography => (
+                "Check many .bib entries at once against real papers (default: all entries, at most 40). Use it for whole-bibliography checks.",
+                schema(json!({"keys": {"type": "array", "items": {"type": "string"}, "description": "Citation keys; leave out for all"}}), &[]),
+            ),
+            InsertBibtex => (
+                "Add a paper's BibTeX to a .bib file, with a citation key no entry uses yet. The user reviews it.",
+                schema(
+                    json!({"id": {"type": "string", "description": "DOI, arXiv id or library id"},
+                        "bib_file": {"type": "string", "description": "Which .bib file (needed when there are several)"}, "reason": reason}),
+                    &["id"],
+                ),
             ),
             GetBibtex => (
                 "Get a clean BibTeX entry for a DOI or an arXiv id.",
@@ -289,6 +382,15 @@ impl Builtin {
             SubmitReport => (
                 "Finish the run with your structured report (a JSON object).",
                 schema(json!({"report": {"type": "object"}}), &["report"]),
+            ),
+            UpdatePlan => (
+                "Mark a task of your plan: active when you start it, then done, partly or notDone (add a short note).",
+                schema(
+                    json!({"n": {"type": "integer", "description": "Task number from the plan"},
+                        "status": {"type": "string", "enum": ["active", "done", "partly", "notDone", "skipped"]},
+                        "note": {"type": "string"}}),
+                    &["n", "status"],
+                ),
             ),
         }
     }
@@ -370,10 +472,123 @@ impl Builtin {
             }
             SearchPapers => {
                 let q = need(args, "query")?;
-                let limit = n(args, "limit").unwrap_or(5).clamp(1, 8) as usize;
-                let r = literature::search_papers(net(cx)?, &q, limit).await.map_err(ai)?;
-                let summary = format!("Searched papers for \"{}\": {} found", one_line(&q, 60), r.papers.len());
-                ToolOutput::ok(crate::agents::types::cap(&r.to_tool_text(), fstools::MAX_RESULT_CHARS), summary)
+                let limit = n(args, "limit").unwrap_or(5).clamp(1, literature::MAX_PAPERS as u64) as usize;
+                let sort = match s(args, "sort").filter(|w| !w.trim().is_empty()) {
+                    Some(w) => SearchSort::parse(&w).ok_or_else(|| ToolOutput::err("`sort` must be relevance, cited or newest."))?,
+                    None => SearchSort::Relevance,
+                };
+                let year = |k: &str| int(args, k).and_then(|y| i32::try_from(y).ok());
+                let opts = SearchOpts { limit, year_from: year("year_from"), year_to: year("year_to"), sort, ..SearchOpts::default() };
+                let ctx = lit_ctx(cx)?;
+                let found = pipeline::search_and_store(&ctx, &q, &opts, provenance(cx, SEARCH_PAPERS)).await.map_err(ai)?;
+                let count = found.items.len();
+                count_up(cx, "papersFound", count);
+                count_up(cx, "papersNew", found.new);
+                let mut summary = format!("Searched papers for \"{}\": {count} found", one_line(&q, 60));
+                if found.new > 0 {
+                    summary.push_str(&format!(", {} new", found.new));
+                }
+                let text = crate::agents::types::cap(&pipeline::found_text(&found), fstools::MAX_RESULT_CHARS);
+                ToolOutput::ok(text, summary).with_data(pipeline::step_data(&found.items))
+            }
+            LibrarySearch => {
+                let q = need(args, "query")?;
+                if q.trim().is_empty() {
+                    return Err(ToolOutput::err("Give a few words to search for."));
+                }
+                let limit = n(args, "limit").unwrap_or(8).clamp(1, 20) as i64;
+                let Some(lib) = net(cx)?.library.clone() else {
+                    return Ok(ToolOutput::ok(
+                        "The paper library isn't available right now, so there is nothing to search offline. Use search_papers to look online.",
+                        "The paper library is unavailable",
+                    ));
+                };
+                let (project, words) = (project_of(cx), q.clone());
+                let page = blocking(move || pipeline::local_search(&lib, &words, Some(&project), limit))
+                    .await?
+                    .map_err(|e| ToolOutput::err(e.plain()))?;
+                let summary = format!("Searched your library for \"{}\": {} found", one_line(&q, 60), page.items.len());
+                let text = crate::agents::types::cap(&pipeline::local_text(q.trim(), &page), fstools::MAX_RESULT_CHARS);
+                ToolOutput::ok(text, summary).with_data(pipeline::step_data(&page.items))
+            }
+            PaperDetails => {
+                let id = need(args, "id")?;
+                let ctx = lit_ctx(cx)?;
+                let (lib, wanted) = (ctx.library.clone(), id.clone());
+                let s2 = blocking(move || pipeline::s2_id_for(lib.as_deref(), &wanted)).await?.map_err(ai)?;
+                let d = pipeline::paper_details(&ctx, &s2).await.map_err(ai)?;
+                let mut items = vec![pipeline::unsaved_paper(&d.paper)];
+                if let Some(lib) = ctx.library.clone() {
+                    let (papers, prov) = (vec![d.paper.clone()], provenance(cx, PAPER_DETAILS));
+                    if let Ok((stored, _)) = blocking(move || pipeline::store_papers(&lib, &papers, &prov)).await? {
+                        items = stored;
+                    }
+                }
+                let text = crate::agents::types::cap(&d.to_tool_text(), fstools::MAX_RESULT_CHARS);
+                ToolOutput::ok(text, format!("Read the details of \"{}\"", one_line(&d.paper.title, 80))).with_data(pipeline::step_data(&items))
+            }
+            VerifyBibliography => {
+                let keys = strings(args, "keys");
+                let bibs = bib_files(cx).map_err(app)?;
+                if bibs.is_empty() {
+                    return Err(ToolOutput::err("This project has no .bib file."));
+                }
+                let ctx = lit_ctx(cx)?;
+                let (entries, missing, total) = pipeline::pick_entries(&bibs, keys.as_deref(), pipeline::MAX_VERIFY_KEYS);
+                if entries.is_empty() {
+                    return Err(ToolOutput::err(if missing.is_empty() {
+                        "The .bib files have no entries.".to_string()
+                    } else {
+                        format!("There's no entry {} in the .bib files.", missing.join(", "))
+                    }));
+                }
+                let count = entries.len();
+                let mut done = Vec::new();
+                for (i, (file, rec)) in entries.into_iter().enumerate() {
+                    cx.progress(ProgressUpdate::Detail(format!("Checking {} ({} of {count})", rec.key, i + 1)));
+                    let c = pipeline::verify_entry(&ctx, &file, &rec).await.map_err(ai)?;
+                    count_up(cx, "keysChecked", 1);
+                    done.push((rec, c));
+                }
+                let checks: Vec<pipeline::BibCheck> = done.iter().map(|(_, c)| c.clone()).collect();
+                // Only entries on disk become "in this project" links; one the
+                // run added or changed waits for the user's review.
+                let root = cx.root.clone();
+                let disk = blocking(move || crate::library::online::bib_texts(&root)).await?;
+                let warning = pipeline::persist_checks(&ctx, &project_of(cx), pipeline::on_disk(done, &disk)).await;
+                let mut text = pipeline::checks_text(&checks, &missing, total);
+                if let Some(w) = warning {
+                    text.push_str(&format!("\n\nNote: {w}"));
+                }
+                let fine = checks.iter().filter(|c| !c.failed && c.check.status == literature::CitationStatus::Verified).count();
+                let summary = format!("Checked {count} citation(s): {fine} verified, {} to look at", count - fine);
+                ToolOutput::ok(crate::agents::types::cap(&text, fstools::MAX_RESULT_CHARS), summary)
+            }
+            InsertBibtex => {
+                let id = need(args, "id")?;
+                let bibs = bib_files(cx).map_err(app)?;
+                let target = pipeline::pick_bib(&bibs, s(args, "bib_file").as_deref()).map_err(ToolOutput::err)?;
+                if let Some(msg) = pipeline::already_cited(&bibs, &id) {
+                    return Err(ToolOutput::err(msg));
+                }
+                let entry = pipeline::fetch_entry(&lit_ctx(cx)?, &id, &bibs).await.map_err(ai)?;
+                let unique = pipeline::unique_entry(&entry, &bibs).map_err(ToolOutput::err)?;
+                let why = reason.unwrap_or_else(|| format!("Added {} to the bibliography", unique.key));
+                let file = {
+                    let mut o = cx.overlay();
+                    let current = o.peek(&target).map_err(app)?.unwrap_or_default();
+                    o.write(&target, &pipeline::append_entry(&current, &unique.bibtex), &why).map_err(app)?
+                };
+                let renamed = unique.renamed_from.as_ref().map(|k| format!(" ({k} was taken)")).unwrap_or_default();
+                let mut text = format!(
+                    "Added the entry to {file} as {key}{renamed}. Cite it with \\cite{{{key}}}. The user reviews the change before it is saved.\n\n{}",
+                    unique.bibtex,
+                    key = unique.key
+                );
+                for w in &unique.warnings {
+                    text.push_str(&format!("\n% Warning: {w}"));
+                }
+                ToolOutput::ok(text, format!("Added {} to {file}", unique.key))
             }
             GetBibtex => {
                 let id = need(args, "id")?;
@@ -384,7 +599,7 @@ impl Builtin {
             VerifyCitation => {
                 let key = need(args, "key")?;
                 let bib = bib_text(cx, &key).map_err(app)?;
-                let r = literature::verify_citation_in(net(cx)?, &bib, &key).await.map_err(ai)?;
+                let r = literature::verify_citation_in(&lit_ctx(cx)?, &bib, &key).await.map_err(ai)?;
                 ToolOutput::ok(r.to_tool_text(), format!("Checked citation {}", one_line(&key, 60)))
             }
             FetchUrl => {
@@ -432,14 +647,78 @@ impl Builtin {
                     ok: true,
                     summary: "Submitted the report".into(),
                     control: Some(Control::Finish(report)),
+                    data: None,
                 }
+            }
+            UpdatePlan => {
+                let Some(n) = n(args, "n").filter(|n| (1..=100).contains(n)) else {
+                    return Err(ToolOutput::err("`n` must be the task's number from the plan."));
+                };
+                let word = need(args, "status")?;
+                let status = PlanStatus::parse(&word)
+                    .ok_or_else(|| ToolOutput::err("`status` must be active, done, partly, notDone or skipped."))?;
+                if cx.progress.is_none() {
+                    return Err(ToolOutput::err("There is no plan to update in this run."));
+                }
+                let note = s(args, "note").map(|t| one_line(&t, 300)).filter(|t| !t.is_empty());
+                let task = s(args, "task").map(|t| one_line(&t, 200)).filter(|t| !t.is_empty());
+                cx.progress(ProgressUpdate::Plan { n: n as u32, status, note, task });
+                ToolOutput::ok("ok", format!("Plan: task {n} {}", plan_word(status)))
             }
         })
     }
 }
 
+fn plan_word(s: PlanStatus) -> &'static str {
+    match s {
+        PlanStatus::Pending => "is pending",
+        PlanStatus::Active => "started",
+        PlanStatus::Done => "done",
+        PlanStatus::Partly => "partly done",
+        PlanStatus::NotDone => "not done",
+        PlanStatus::Skipped => "skipped",
+    }
+}
+
 fn net(cx: &ToolCx) -> Result<&NetCtx, ToolOutput> {
     cx.net.as_ref().ok_or_else(|| ToolOutput::err("Web access isn't available in this run."))
+}
+
+/// The project folder, as the library names it.
+fn project_of(cx: &ToolCx) -> String {
+    cx.root.to_string_lossy().to_string()
+}
+
+/// Who found what: this run, this tool, this project.
+fn provenance(cx: &ToolCx, tool: &str) -> Provenance {
+    Provenance { run_id: Some(cx.run_id.clone()), tool: Some(tool.to_string()), project: Some(project_of(cx)), save: false }
+}
+
+/// The run's context for one literature call: ranks for this project and
+/// shows each source as a chip on the run card.
+fn lit_ctx(cx: &ToolCx) -> Result<NetCtx, ToolOutput> {
+    let net = net(cx)?;
+    let listener = cx.progress.clone().map(|f| -> pipeline::Listener {
+        Arc::new(move |ev: &SourceEvent| {
+            if let Some(chip) = pipeline::chip(ev) {
+                f(ProgressUpdate::Source(chip));
+            }
+        })
+    });
+    Ok(pipeline::scoped(net, Some(project_of(cx)), listener))
+}
+
+fn count_up(cx: &ToolCx, key: &str, by: usize) {
+    if by > 0 {
+        cx.progress(ProgressUpdate::Count { key: key.to_string(), by: by as u64 });
+    }
+}
+
+/// Every `.bib` file of the project in this run's view, with its text.
+fn bib_files(cx: &ToolCx) -> crate::error::AppResult<Vec<(String, String)>> {
+    let o = cx.overlay();
+    let (files, _) = o.list(Some("*.bib"))?;
+    Ok(files.into_iter().filter_map(|(path, _)| o.peek(&path).ok().flatten().map(|t| (path, t))).collect())
 }
 
 /// The `.bib` text that holds `key` (all the project's .bib files joined).
@@ -470,7 +749,7 @@ impl Tool for Builtin {
     }
 
     fn read_only(&self) -> bool {
-        !matches!(self, Builtin::EditFile | Builtin::WriteFile | Builtin::DeleteFile)
+        !matches!(self, Builtin::EditFile | Builtin::WriteFile | Builtin::DeleteFile | Builtin::InsertBibtex)
     }
 
     fn call<'a>(&'a self, cx: &'a ToolCx, args: &'a Value) -> BoxFut<'a, ToolOutput> {

@@ -9,6 +9,7 @@ mod engine;
 mod error;
 mod fsops;
 mod history;
+mod library;
 mod project;
 mod settings;
 mod symbols;
@@ -81,6 +82,9 @@ pub fn run() {
                 &app.path().app_data_dir()?,
             ));
             app.manage(agents::commands::runtime_for(app.handle()));
+            // The paper library never stops Texo from starting: when it
+            // can't be opened, its commands report why.
+            app.manage(library::LibraryState::open(&app.path().app_data_dir()?.join("library")));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -183,7 +187,32 @@ pub fn run() {
             agents::ui_support::agent_kind_tools,
             agents::ui_support::review_render,
             agents::ui_support::review_save_as,
+            library::commands::library_status,
+            library::commands::library_search,
+            library::commands::library_get,
+            library::commands::library_save,
+            library::commands::library_unsave,
+            library::commands::library_remove,
+            library::commands::library_tag,
+            library::commands::library_note,
+            library::commands::library_project_refs,
+            library::commands::library_sync_bib,
+            library::commands::library_clear_cache,
+            library::commands::library_backup,
+            library::commands::library_export,
+            library::online::library_search_online,
+            library::online::library_verify,
+            library::online::library_bibtex_for,
+            library::online::library_related,
+            library::online::library_cancel,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Texo");
+        .build(tauri::generate_context!())
+        .expect("error while running Texo")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(lib) = app.try_state::<library::LibraryState>() {
+                    lib.close();
+                }
+            }
+        });
 }

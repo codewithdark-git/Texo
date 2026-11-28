@@ -21,7 +21,7 @@ use super::{json_in_text, AgentKind, Outcome};
 use crate::agents::review::ReviewReport;
 use crate::agents::run_loop::{LoopEnd, LoopSpec, RunCx};
 use crate::agents::tools::registry::*;
-use crate::agents::types::{one_line, Report};
+use crate::agents::types::{one_line, Phase, PhaseStatus, PlanItem, PlanStatus, Report, RunProgress};
 use crate::ai::error::{AiError, AiResult, Kind};
 use crate::ai::llm::{Msg, Part, ToolSpec};
 
@@ -302,6 +302,7 @@ impl Tool for SubmitPlan {
                 ok: true,
                 summary: format!("Handed in a plan with {} concern(s)", concerns.len()),
                 control: Some(Control::Finish(Report { kind: PLAN_KIND.into(), data })),
+                data: None,
             }
         })
     }
@@ -321,7 +322,7 @@ impl AgentKind for Rebuttal {
     }
 
     fn tool_names(&self) -> Vec<&'static str> {
-        [FS_READ, FS_WRITE, LITERATURE, &[FETCH_URL], MEMORY, REPORT].concat()
+        [FS_READ, FS_WRITE, LITERATURE, &[FETCH_URL], MEMORY, REPORT, PLAN].concat()
     }
 
     fn extra_tools(&self) -> Vec<Arc<dyn Tool>> {
@@ -366,7 +367,43 @@ fn plan_spec(kind: &Rebuttal, cx: &RunCx) -> LoopSpec {
     spec
 }
 
+/// The rebuttal's phases: read, plan (approved by the user), draft, report.
+pub fn phases() -> Vec<Phase> {
+    vec![
+        Phase::new("read", "Read the reviews"),
+        Phase::new("plan", "Plan (needs your approval)"),
+        Phase::new("draft", "Draft responses"),
+        Phase::new("report", "Report"),
+    ]
+}
+
+/// The approved concerns as the plan checklist (numbered 1..n).
+pub fn plan_items(concerns: &[Concern]) -> Vec<PlanItem> {
+    concerns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| PlanItem { n: i as u32 + 1, task: format!("{}: {}", c.id, one_line(&c.summary, 140)), ..Default::default() })
+        .collect()
+}
+
+/// The drafted statuses onto the plan: answered / changed are done, tbd is
+/// partly (an experiment still to run), skipped is skipped.
+pub fn apply_statuses(progress: &mut RunProgress, concerns: &[Concern]) {
+    for (i, c) in concerns.iter().enumerate() {
+        let status = match c.status.as_deref().map(|s| s.trim().to_lowercase()) {
+            Some(s) if s == "answered" || s == "changed" || s == "done" => PlanStatus::Done,
+            Some(s) if s == "tbd" || s == "partly" => PlanStatus::Partly,
+            Some(s) if s == "skipped" => PlanStatus::Skipped,
+            _ => continue,
+        };
+        progress.update_plan(i as u32 + 1, status, c.changes.clone(), None);
+    }
+}
+
 async fn drive(kind: &Rebuttal, cx: &RunCx) -> AiResult<Outcome> {
+    let sh = &cx.shared;
+    sh.set_phases(phases());
+    sh.set_phase("read", PhaseStatus::Active, None, None, None);
     // 1. The plan.
     let out = cx.run_loop(plan_spec(kind, cx)).await?;
     let proposed = match &out.report {
@@ -381,6 +418,10 @@ async fn drive(kind: &Rebuttal, cx: &RunCx) -> AiResult<Outcome> {
         return Err(AiError::new(Kind::Other, why));
     }
     cx.message(&plan_text(&proposed));
+    sh.update(|run| {
+        run.progress.set_phase("read", PhaseStatus::Done, Some(format!("{} concern(s)", proposed.len())), None, None);
+        run.progress.set_phase("plan", PhaseStatus::Active, None, None, None);
+    });
 
     // 2. Wait for the user.
     let payload = PlanPayload {
@@ -391,6 +432,10 @@ async fn drive(kind: &Rebuttal, cx: &RunCx) -> AiResult<Outcome> {
     let answer = cx.await_input(serde_json::to_value(&payload).unwrap_or(Value::Null)).await?;
     let (concerns, note) = match parse_answer(&answer, &proposed) {
         PlanAnswer::Declined => {
+            sh.update(|run| {
+                run.progress.set_phase("plan", PhaseStatus::Done, Some("You stopped before drafting".into()), None, None);
+                run.progress.skip_unfinished();
+            });
             let mut data = serde_json::Map::new();
             data.insert("concerns".into(), json!(proposed));
             data.insert("letter".into(), Value::Null);
@@ -404,6 +449,11 @@ async fn drive(kind: &Rebuttal, cx: &RunCx) -> AiResult<Outcome> {
         PlanAnswer::Approved { concerns, note } => (concerns, note),
     };
     cx.message(&format!("You approved the plan ({} concern(s)). Drafting the response.", concerns.len()));
+    sh.update(|run| {
+        run.progress.set_phase("plan", PhaseStatus::Done, Some("Approved".into()), None, None);
+        run.progress.set_phase("draft", PhaseStatus::Active, None, None, None);
+        run.progress.set_plan(plan_items(&concerns));
+    });
 
     // 3. The draft.
     let mut spec = cx.default_spec(kind);
@@ -418,6 +468,9 @@ async fn drive(kind: &Rebuttal, cx: &RunCx) -> AiResult<Outcome> {
         );
         if let Some(n) = &note {
             t.push_str(&format!("\n\nThe user's note on the plan: {n}"));
+        }
+        if spec.tools.iter().any(|t| t.spec().name == UPDATE_PLAN) {
+            t.push_str("\n\nThe concerns are numbered 1, 2, … in this order. When you have answered one, call update_plan with its number and status \"done\" (\"partly\" when it waits for a new experiment).");
         }
         content.push(Part::Text { text: t });
     }
@@ -473,6 +526,13 @@ async fn drive(kind: &Rebuttal, cx: &RunCx) -> AiResult<Outcome> {
             c.changes = r.changes.clone();
         }
     }
+    sh.update(|run| {
+        let p = &mut run.progress;
+        apply_statuses(p, &merged);
+        let draft = if letter.is_some() { PhaseStatus::Done } else { PhaseStatus::Failed };
+        p.set_phase("draft", draft, None, None, None);
+        p.set_phase("report", PhaseStatus::Done, None, None, None);
+    });
     let summary = out
         .report
         .as_ref()

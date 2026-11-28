@@ -9,11 +9,14 @@ import sidebar from "./Sidebar.tsx?raw";
 import appMenu from "./AppMenu.tsx?raw";
 import globalDialogs from "./GlobalDialogs.tsx?raw";
 import workspace from "../workspace/Workspace.tsx?raw";
+import leftSidebar from "../workspace/LeftSidebar.tsx?raw";
+import sidebarFooter from "../workspace/SidebarFooter.tsx?raw";
 import settings from "./SettingsDialog.tsx?raw";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: async () => {} }));
 
-import { SupportButton, SupportTopButton } from "./SupportDialog";
+import { SupportButton, SupportFooterButton } from "./SupportDialog";
+import { SidebarFooter } from "../workspace/SidebarFooter";
 import { useUi } from "../ui";
 
 const OPENS_SUPPORT = 'openDialog("support")';
@@ -114,24 +117,31 @@ function expectAlwaysShown(source: string, name: string) {
 describe("Support entry points", () => {
   it("both support buttons open the support dialog", () => {
     expect(code(functionBody(supportDialog, "SupportButton"))).toContain(OPENS_SUPPORT);
-    expect(code(functionBody(supportDialog, "SupportTopButton"))).toContain(OPENS_SUPPORT);
+    expect(code(functionBody(supportDialog, "SupportFooterButton"))).toContain(OPENS_SUPPORT);
   });
 
   it("both support buttons render a visible button in every build", () => {
-    for (const fn of ["SupportButton", "SupportTopButton"]) {
+    for (const fn of ["SupportButton", "SupportFooterButton"]) {
       const body = code(functionBody(supportDialog, fn));
       expect(body, `${fn} must not depend on the build`).not.toMatch(/import\.meta\.env|process\.env|return null/);
     }
     const sidebarHtml = renderToStaticMarkup(createElement(SupportButton));
     expect(sidebarHtml).toMatch(/^<button\b/);
     expect(sidebarHtml).toContain("Support us");
-    const topHtml = renderToStaticMarkup(createElement(SupportTopButton));
-    expect(topHtml).toMatch(/^<button\b/);
-    expect(topHtml).toContain('aria-label="Support Texo"');
-    // The button itself is on screen; only its text label may collapse on narrow windows.
-    for (const html of [sidebarHtml, topHtml]) {
-      const rootClass = /^<button[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
-      expect(rootClass).not.toMatch(HIDING);
+    const fullHtml = renderToStaticMarkup(createElement(SupportFooterButton, { compact: false }));
+    expect(fullHtml).toMatch(/^<button\b/);
+    expect(fullHtml).toContain(">Support Texo</span>");
+    // In the folded rail it is the heart alone, inside its tooltip.
+    const railHtml = renderToStaticMarkup(createElement(SupportFooterButton, { compact: true }));
+    expect(railHtml).toMatch(/^<span[^>]*><button\b/);
+    // The button itself is on screen in every variant; only its text label goes in the rail.
+    for (const html of [sidebarHtml, fullHtml, railHtml]) {
+      if (html !== sidebarHtml) expect(html).toContain('aria-label="Support Texo"');
+      const wrapperClass = /^<span[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
+      const buttonClass = /^(?:<span[^>]*>)?<button[^>]*class="([^"]*)"/.exec(html)?.[1];
+      expect(buttonClass).toBeDefined();
+      expect(buttonClass).not.toMatch(HIDING);
+      expect(wrapperClass).not.toMatch(HIDING);
     }
   });
 
@@ -139,12 +149,23 @@ describe("Support entry points", () => {
     expectAlwaysShown(sidebar, "SupportButton");
   });
 
-  it("the workspace top bar always shows the Support button", () => {
-    const header = code(workspace).match(/return \([\s\S]*?<header[\s\S]*?<\/header>/)?.[0] ?? "";
-    expect(header).toMatch(/<SupportTopButton\b/);
-    expectAlwaysShown(workspace, "SupportTopButton");
-    const place = placeOf(workspace, "SupportTopButton") as Ancestor[];
-    expect(place.some((a) => a.name === "header")).toBe(true);
+  it("the workspace sidebar footer always shows the Support button, folded to the rail or not", () => {
+    // One button for both states: the footer passes the rail state down rather than choosing between two.
+    expectAlwaysShown(sidebarFooter, "SupportFooterButton");
+    expect(code(sidebarFooter)).toMatch(/<SupportFooterButton compact=\{compact\} \/>/);
+    // The footer sits in the sidebar unconditionally, and the sidebar in the workspace.
+    expectAlwaysShown(leftSidebar, "SidebarFooter");
+    expect(code(leftSidebar)).toMatch(/<SidebarFooter [^>]*compact=\{collapsed\}/);
+    expectAlwaysShown(workspace, "LeftSidebar");
+    for (const compact of [false, true]) {
+      const html = renderToStaticMarkup(createElement(SidebarFooter, { project: "C:/p", compact }));
+      expect(html, `compact=${compact}`).toContain('aria-label="Support Texo"');
+      expect(/^<div[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "").not.toMatch(HIDING);
+    }
+  });
+
+  it("the workspace top bar no longer carries a Support button", () => {
+    expect(code(workspace)).not.toMatch(/<Support\w*Button\b/);
   });
 
   it("the app menu has an unconditional Support Texo item that opens the dialog", () => {

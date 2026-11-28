@@ -88,10 +88,13 @@ pub enum ServiceSecret {
     Tavily,
     /// Brave Search API (web search).
     Brave,
+    /// Semantic Scholar (literature search; optional, raises its limits).
+    SemanticScholar,
 }
 
 impl ServiceSecret {
-    pub const ALL: [ServiceSecret; 3] = [ServiceSecret::Openalex, ServiceSecret::Tavily, ServiceSecret::Brave];
+    pub const ALL: [ServiceSecret; 4] =
+        [ServiceSecret::Openalex, ServiceSecret::Tavily, ServiceSecret::Brave, ServiceSecret::SemanticScholar];
 
     /// The account name in the credential store (and key file).
     pub fn account(self) -> &'static str {
@@ -99,6 +102,7 @@ impl ServiceSecret {
             ServiceSecret::Openalex => "web.openalex",
             ServiceSecret::Tavily => "web.tavily",
             ServiceSecret::Brave => "web.brave",
+            ServiceSecret::SemanticScholar => "web.s2",
         }
     }
 }
@@ -431,6 +435,32 @@ pub mod tests {
             assert!(clean_key("has space").is_err());
             assert!(store.set_secret(ServiceSecret::Openalex, "").is_err());
         }
+    }
+
+    #[test]
+    fn semantic_scholar_key_round_trips() {
+        const S2: &str = "s2-AbCdEf0123456789";
+        for backend in [Box::new(MemBackend::default()) as Box<dyn SecretBackend>, Box::new(NoBackend)] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = KeyStore::new(backend, dir.path());
+            let st = store.set_secret(ServiceSecret::SemanticScholar, &format!(" {S2}\n")).unwrap();
+            assert!(st.has_key);
+            assert_eq!(store.get_secret(ServiceSecret::SemanticScholar).unwrap().0.expose(), S2);
+            assert!(!store.secret_status(ServiceSecret::Openalex).has_key);
+            let json = serde_json::to_string(&st).unwrap();
+            assert!(json.contains("\"secret\":\"semanticScholar\"") && !json.contains(S2));
+            assert!(!store.clear_secret(ServiceSecret::SemanticScholar).unwrap().has_key);
+            assert!(store.get_secret(ServiceSecret::SemanticScholar).is_none());
+        }
+        // The file fallback keeps it under its own account name.
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::new(Box::new(NoBackend), dir.path());
+        let st = store.set_secret(ServiceSecret::SemanticScholar, S2).unwrap();
+        assert_eq!(st.storage, Some(Storage::File));
+        let file = fs::read_to_string(dir.path().join(FALLBACK_FILE)).unwrap();
+        assert!(file.contains("\"web.s2\""));
+        let again = KeyStore::new(Box::new(NoBackend), dir.path());
+        assert_eq!(again.get_secret(ServiceSecret::SemanticScholar).unwrap().0.expose(), S2);
     }
 
     #[test]

@@ -163,6 +163,7 @@ impl AgentRuntime {
             status: RunStatus::Queued,
             started_at: now(),
             options: request.options.clone(),
+            max_steps: request.options.max_steps.unwrap_or(kind.limits().max_steps).clamp(1, 200),
             ..Default::default()
         };
         journal::save(&root, &run)?;
@@ -349,6 +350,7 @@ async fn drive(inner: &Inner, sh: &Arc<RunShared>, kind: &dyn AgentKind) -> AiRe
         build,
         net: env.net.clone(),
         cancel: sh.cancel.clone(),
+        progress: Some(sh.progress_sink()),
     };
     let cx = RunCx {
         shared: sh.clone(),
@@ -435,6 +437,8 @@ async fn finish(sh: &Arc<RunShared>, kind: &dyn AgentKind, result: AiResult<Outc
                 run.error = Some(e.message);
             }
         }
+        run.progress.settle(run.status);
+        run.deadline_at = None;
     });
     let run = sh.snapshot();
     let auto = run.options.auto_apply

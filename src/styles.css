@@ -14,6 +14,19 @@
   --accent-strong: #6f7dff;
   --accent-ink: #0f1130;
   --danger: #ff7b7b;
+  --success: #5fd39a;
+  --warning: #f2b84b;
+  --info: #6cb6ff;
+  --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.35);
+  --shadow-panel: -8px 0 24px rgb(0 0 0 / 0.18);
+  /* Motion durations. Reduced motion zeroes them below, so anything timed
+     with them simply snaps into place. */
+  --dur-1: 100ms;
+  --dur-2: 150ms;
+  --dur-3: 200ms;
+  --dur-4: 300ms;
+  --dur-5: 400ms;
+  --dur-fade: 150ms;
   color-scheme: dark;
 }
 
@@ -28,6 +41,10 @@
   --accent-strong: #3b4ad6;
   --accent-ink: #ffffff;
   --danger: #c93030;
+  --success: #16a34a;
+  --warning: #b45309;
+  --info: #2563eb;
+  --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.12);
   color-scheme: light;
 }
 
@@ -43,6 +60,10 @@
     --accent-strong: #3b4ad6;
     --accent-ink: #ffffff;
     --danger: #c93030;
+    --success: #16a34a;
+    --warning: #b45309;
+    --info: #2563eb;
+    --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.12);
     color-scheme: light;
   }
 }
@@ -58,8 +79,18 @@
   --color-accent-strong: var(--accent-strong);
   --color-accent-ink: var(--accent-ink);
   --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Code", Consolas, monospace;
+}
+
+/* Easings, as Tailwind ease-* utilities too. */
+@theme {
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
 }
 
 html,
@@ -83,17 +114,156 @@ textarea {
   user-select: text;
 }
 
+/* Motion. Every animation here uses the tokens above, and every class that
+   sets `animation` is listed again in the reduced-motion rules at the end of
+   this section (styles.motion.test.ts checks that). */
+.texo-fade-in {
+  animation: texo-fade var(--dur-fade) var(--ease-standard) backwards;
+}
+.texo-fade-out {
+  animation: texo-fade-out var(--dur-fade) var(--ease-exit) forwards;
+}
 /* Dialogs and toasts ease in rather than popping. */
 .texo-pop {
-  animation: texo-pop 140ms ease-out;
+  animation: texo-pop var(--dur-2) var(--ease-enter) backwards;
+}
+.texo-pop-out {
+  animation: texo-pop-out var(--dur-2) var(--ease-exit) forwards;
 }
 .texo-toast {
-  animation: texo-toast 180ms ease-out;
+  animation: texo-toast var(--dur-3) var(--ease-enter) backwards;
+}
+.texo-toast-out {
+  animation: texo-toast-out var(--dur-3) var(--ease-exit) forwards;
+}
+.texo-slide-in-right {
+  animation: texo-slide-in-right var(--dur-4) var(--ease-enter) backwards;
+}
+.texo-slide-in-left {
+  animation: texo-slide-in-left var(--dur-4) var(--ease-enter) backwards;
+}
+.texo-slide-in-up {
+  animation: texo-slide-in-up var(--dur-4) var(--ease-enter) backwards;
+}
+.texo-slide-out-right {
+  animation: texo-slide-out-right var(--dur-3) var(--ease-exit) forwards;
+}
+/* Menus and popovers grow from the edge they open from (`data-side`, `data-align`). */
+.texo-menu,
+.texo-menu-out {
+  transform-origin: var(--texo-origin-x, center) var(--texo-origin-y, top);
+}
+.texo-menu {
+  animation: texo-menu 120ms var(--ease-enter) backwards;
+}
+.texo-menu-out {
+  animation: texo-menu-out var(--dur-1) var(--ease-exit) forwards;
+}
+[data-side="bottom"] {
+  --texo-origin-y: top;
+}
+[data-side="top"] {
+  --texo-origin-y: bottom;
+}
+[data-side="left"] {
+  --texo-origin-x: right;
+  --texo-origin-y: center;
+}
+[data-side="right"] {
+  --texo-origin-x: left;
+  --texo-origin-y: center;
+}
+[data-align="start"] {
+  --texo-origin-x: left;
+}
+[data-align="end"] {
+  --texo-origin-x: right;
+}
+/* Wrap the content in one element; it opens to its natural height. */
+.texo-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-3) var(--ease-standard);
+}
+.texo-collapse[data-open]:not([data-open="false"]) {
+  grid-template-rows: 1fr;
+}
+.texo-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+.texo-indicator {
+  transition:
+    transform var(--dur-2) var(--ease-standard),
+    width var(--dur-2) var(--ease-standard),
+    opacity var(--dur-2) var(--ease-standard);
+}
+.texo-shimmer {
+  background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 35%, var(--text) 50%, var(--muted) 65%, var(--muted) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: texo-shimmer 1.6s linear infinite;
+}
+.texo-skeleton {
+  border-radius: 4px;
+  background: var(--surface-2);
+  animation: texo-skeleton 1.4s ease-in-out infinite;
+}
+/* Children set --i (their index); only the first eight are delayed. */
+.texo-stagger > * {
+  animation: texo-slide-in-up var(--dur-3) var(--ease-enter) backwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+}
+/* For a path with pathLength="1". */
+.texo-check-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: texo-check-draw var(--dur-2) var(--ease-standard) both;
+}
+.texo-ring-value {
+  transition: stroke-dashoffset var(--dur-4) var(--ease-standard);
+}
+.texo-ring-indeterminate {
+  transform-origin: center;
+  animation: texo-spin 1s linear infinite;
+}
+.texo-bar-value {
+  transition: width var(--dur-4) var(--ease-standard);
+}
+.texo-bar-indeterminate {
+  width: 40%;
+  animation: texo-bar-slide 1.2s var(--ease-standard) infinite;
+}
+.texo-pulse-dot {
+  animation: texo-pulse-dot 2s ease-in-out infinite;
+}
+/* Draws the eye to something that just came into view. */
+.texo-flash {
+  animation: texo-flash 600ms var(--ease-standard) forwards;
+}
+
+@keyframes texo-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes texo-fade-out {
+  to {
+    opacity: 0;
+  }
 }
 @keyframes texo-pop {
   from {
     opacity: 0;
     transform: translateY(6px) scale(0.98);
+  }
+}
+@keyframes texo-pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
   }
 }
 @keyframes texo-toast {
@@ -102,11 +272,208 @@ textarea {
     transform: translateY(10px);
   }
 }
+@keyframes texo-toast-out {
+  to {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+@keyframes texo-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes texo-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+@keyframes texo-slide-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes texo-slide-out-right {
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes texo-menu {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+@keyframes texo-menu-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+@keyframes texo-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@keyframes texo-skeleton {
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes texo-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+@keyframes texo-check-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+@keyframes texo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes texo-bar-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+@keyframes texo-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 40%, transparent);
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+@keyframes texo-flash {
+  from {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  to {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
+/* Reduced motion, from the system (unless Settings says Full) or from
+   Settings. Durations drop to nothing, movement becomes a short fade or
+   stops, and spinners keep turning because they show that work is going on.
+   The flash holds its outline still, then drops it. Keep the two copies the
+   same. */
 @media (prefers-reduced-motion: reduce) {
-  .texo-pop,
-  .texo-toast {
+  :root:not([data-motion="full"]) {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+    --dur-3: 0ms;
+    --dur-4: 0ms;
+    --dur-5: 0ms;
+    --dur-fade: 100ms;
+  }
+  :root:not([data-motion="full"]) .texo-fade-in,
+  :root:not([data-motion="full"]) .texo-pop,
+  :root:not([data-motion="full"]) .texo-toast,
+  :root:not([data-motion="full"]) .texo-slide-in-right,
+  :root:not([data-motion="full"]) .texo-slide-in-left,
+  :root:not([data-motion="full"]) .texo-slide-in-up,
+  :root:not([data-motion="full"]) .texo-menu,
+  :root:not([data-motion="full"]) .texo-stagger > * {
+    animation: texo-fade var(--dur-fade) linear backwards;
+  }
+  :root:not([data-motion="full"]) .texo-fade-out,
+  :root:not([data-motion="full"]) .texo-pop-out,
+  :root:not([data-motion="full"]) .texo-toast-out,
+  :root:not([data-motion="full"]) .texo-slide-out-right,
+  :root:not([data-motion="full"]) .texo-menu-out {
+    animation: texo-fade-out var(--dur-fade) linear forwards;
+  }
+  :root:not([data-motion="full"]) .texo-shimmer {
+    animation: none;
+    background: none;
+    color: var(--muted);
+  }
+  :root:not([data-motion="full"]) .texo-skeleton,
+  :root:not([data-motion="full"]) .texo-pulse-dot,
+  :root:not([data-motion="full"]) .texo-check-draw {
     animation: none;
   }
+  :root:not([data-motion="full"]) .texo-bar-indeterminate {
+    width: 100%;
+    animation: texo-breathe 1.6s ease-in-out infinite;
+  }
+  :root:not([data-motion="full"]) .texo-ring-indeterminate {
+    animation: texo-spin 1s linear infinite;
+  }
+  :root:not([data-motion="full"]) .texo-flash {
+    animation: texo-flash 600ms step-end forwards;
+  }
+  :root:not([data-motion="full"]) .texo-sync-mark {
+    animation: texo-sync-fade 2.2s ease-out forwards;
+  }
+}
+:root[data-motion="reduce"] {
+  --dur-1: 0ms;
+  --dur-2: 0ms;
+  --dur-3: 0ms;
+  --dur-4: 0ms;
+  --dur-5: 0ms;
+  --dur-fade: 100ms;
+}
+:root[data-motion="reduce"] .texo-fade-in,
+:root[data-motion="reduce"] .texo-pop,
+:root[data-motion="reduce"] .texo-toast,
+:root[data-motion="reduce"] .texo-slide-in-right,
+:root[data-motion="reduce"] .texo-slide-in-left,
+:root[data-motion="reduce"] .texo-slide-in-up,
+:root[data-motion="reduce"] .texo-menu,
+:root[data-motion="reduce"] .texo-stagger > * {
+  animation: texo-fade var(--dur-fade) linear backwards;
+}
+:root[data-motion="reduce"] .texo-fade-out,
+:root[data-motion="reduce"] .texo-pop-out,
+:root[data-motion="reduce"] .texo-toast-out,
+:root[data-motion="reduce"] .texo-slide-out-right,
+:root[data-motion="reduce"] .texo-menu-out {
+  animation: texo-fade-out var(--dur-fade) linear forwards;
+}
+:root[data-motion="reduce"] .texo-shimmer {
+  animation: none;
+  background: none;
+  color: var(--muted);
+}
+:root[data-motion="reduce"] .texo-skeleton,
+:root[data-motion="reduce"] .texo-pulse-dot,
+:root[data-motion="reduce"] .texo-check-draw {
+  animation: none;
+}
+:root[data-motion="reduce"] .texo-bar-indeterminate {
+  width: 100%;
+  animation: texo-breathe 1.6s ease-in-out infinite;
+}
+:root[data-motion="reduce"] .texo-ring-indeterminate {
+  animation: texo-spin 1s linear infinite;
+}
+:root[data-motion="reduce"] .texo-flash {
+  animation: texo-flash 600ms step-end forwards;
+}
+:root[data-motion="reduce"] .texo-sync-mark {
+  animation: texo-sync-fade 2.2s ease-out forwards;
 }
 
 /* PDF viewer (pdf.js). */

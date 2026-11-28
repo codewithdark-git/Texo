@@ -146,6 +146,14 @@ export function onModelDispose(fn: (path: string) => void): () => void {
   return () => void disposeListeners.delete(fn);
 }
 
+const openListeners = new Set<(path: string) => void>();
+
+/** Runs `fn` whenever a file is asked to show in the editor (so an AI tab in front makes way). */
+export function onOpenFile(fn: (path: string) => void): () => void {
+  openListeners.add(fn);
+  return () => void openListeners.delete(fn);
+}
+
 /** What a saved session stores: tabs, the active tab, cursors, and modes of open files. */
 function sessionSnapshot(state: { tabs: string[]; active: string | null; modes: Record<string, EditorMode> }): SavedSession {
   const { tabs, active, modes } = state;
@@ -417,6 +425,7 @@ export const useWorkspace = create<WorkspaceStore>((set, get) => {
         return;
       }
       set((s) => ({ tabs: s.tabs.includes(path) ? s.tabs : [...s.tabs, path], active: path }));
+      openListeners.forEach((fn) => fn(path));
       const existing = get().views[path];
       if (existing && existing.kind !== "error") return;
       set((s) => ({ views: { ...s.views, [path]: { kind: "loading" } } }));

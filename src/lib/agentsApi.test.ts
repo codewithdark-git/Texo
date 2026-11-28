@@ -75,3 +75,52 @@ describe("kind reports, plans and profiles", () => {
     expect(utf8Bytes("▸")).toBe(3);
   });
 });
+
+describe("run progress", () => {
+  const progress = {
+    phases: [
+      { id: "read", label: "Read the errors", status: "done", startedAt: 1, finishedAt: 2, detail: "3 errors" },
+      { id: "round1", label: "Fix round 1 of 3", status: "active", startedAt: 2, detail: "3 errors left" },
+      { id: "work", label: "Work", status: "pending", done: 0, total: 2 },
+    ],
+    plan: [
+      { n: 1, task: "Add a greeting", status: "done", note: "Added" },
+      { n: 2, task: "Fix the typo", status: "notDone" },
+    ],
+    activity: {
+      tool: "search_papers",
+      label: 'Searching papers: "diffusion"',
+      startedAt: 3,
+      sources: [{ source: "arXiv", state: "ok", detail: "4" }],
+    },
+    counts: { papersFound: 4 },
+  };
+
+  it("recognises well-formed progress", async () => {
+    const { isRunProgress } = await import("./agentsApi");
+    expect(isRunProgress(progress)).toBe(true);
+    expect(isRunProgress({ ...progress, activity: null })).toBe(true);
+    expect(isRunProgress({ phases: [], plan: [], activity: null, counts: {} })).toBe(true);
+  });
+
+  it("refuses malformed progress", async () => {
+    const { isRunProgress } = await import("./agentsApi");
+    expect(isRunProgress(null)).toBe(false);
+    expect(isRunProgress([])).toBe(false);
+    expect(isRunProgress({ phases: [], plan: [], counts: {} })).toBe(true);
+    expect(isRunProgress({ plan: [], activity: null, counts: {} })).toBe(false);
+    expect(isRunProgress({ ...progress, phases: [{ id: "x", label: "X", status: "running" }] })).toBe(false);
+    expect(isRunProgress({ ...progress, plan: [{ n: "1", task: "A", status: "done" }] })).toBe(false);
+    expect(isRunProgress({ ...progress, plan: [{ n: 1, task: "A", status: "not done" }] })).toBe(false);
+    expect(isRunProgress({ ...progress, activity: { tool: "x", label: "y" } })).toBe(false);
+    expect(isRunProgress({ ...progress, counts: { papersFound: "4" } })).toBe(false);
+  });
+
+  it("gives runs from Texo 1.2 an empty progress", async () => {
+    const { runProgress, EMPTY_PROGRESS } = await import("./agentsApi");
+    expect(runProgress({})).toEqual(EMPTY_PROGRESS);
+    expect(runProgress({ progress: { phases: "x" } })).toEqual(EMPTY_PROGRESS);
+    expect(runProgress({ progress: { phases: [], plan: [], counts: {} } }).activity).toBeNull();
+    expect(runProgress({ progress }).plan).toHaveLength(2);
+  });
+});

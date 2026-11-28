@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,10 +33,16 @@ use super::overlay::Overlay;
 use super::tools::build::BuildEnv;
 use super::tools::fs::MAX_RESULT_CHARS;
 use super::tools::net::NetCtx;
-use super::tools::registry::{brings_outside_text, tools_by_name, Control, Tool, ToolCx, REMEMBER};
+use super::tools::registry::{brings_outside_text, tools_by_name, Control, ProgressFn, Tool, ToolCx, REMEMBER};
 use super::types::{
-    cap, cap_args, now, one_line, AgentRun, MessageEvent, Report, RunStatus, RunSummary, Step, StepEvent, StepKind,
+    cap, cap_args, cap_data, now, one_line, Activity, AgentRun, MessageEvent, Phase, PhaseStatus, PlanItem, ProgressUpdate,
+    Report, RunStatus, RunSummary, Step, StepEvent, StepKind,
 };
+
+/// Activity-only updates (a tool's sub-progress) reach the window at most
+/// this often; one that comes sooner goes out when the time is up. Starting
+/// and ending a tool always go out.
+pub const ACTIVITY_THROTTLE: Duration = Duration::from_millis(150);
 
 /// Where run updates go (the window in the app; a recorder in tests).
 pub trait Events: Send + Sync {
@@ -83,6 +89,19 @@ pub struct RunShared {
     /// A web or literature tool ran in this run: its text could carry
     /// planted instructions, so `remember` is refused from then on.
     pub outside_text: AtomicBool,
+    /// Numbers activities (see [`Activity::token`]).
+    next_activity: AtomicU64,
+    /// The throttle of activity-only updates.
+    activity_emit: Mutex<ActivityEmit>,
+}
+
+#[derive(Default)]
+struct ActivityEmit {
+    /// When the last activity-only update went to the window.
+    last: Option<Instant>,
+    /// A throttled change hasn't reached the window yet (a later send is
+    /// scheduled).
+    pending: bool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -113,6 +132,8 @@ impl RunShared {
             deadline: Mutex::new(None),
             deleted: AtomicBool::new(false),
             outside_text: AtomicBool::new(false),
+            next_activity: AtomicU64::new(1),
+            activity_emit: Mutex::new(ActivityEmit::default()),
         }
     }
 
@@ -128,12 +149,148 @@ impl RunShared {
             if self.deleted.load(Ordering::SeqCst) {
                 return;
             }
+            // This update carries any throttled activity change too.
+            lock(&self.activity_emit).pending = false;
+            // The running tool is only for the window, never the journal.
+            let activity = run.progress.activity.take();
             if let Err(e) = journal::save(&self.root, &run) {
                 eprintln!("texo: couldn't save the AI run journal: {e}");
             }
+            run.progress.activity = activity;
             run.summary()
         };
         self.events.run_updated(&summary);
+    }
+
+    /// Changes only the activity: tells the window, never saves the
+    /// journal. Unless `always`, a change that comes within
+    /// [`ACTIVITY_THROTTLE`] of the last one is sent when that time is up
+    /// (with whatever changed meanwhile).
+    fn update_activity(self: &Arc<Self>, always: bool, f: impl FnOnce(&mut AgentRun) -> bool) {
+        let summary = {
+            let mut run = lock(&self.run);
+            if !f(&mut run) || self.deleted.load(Ordering::SeqCst) {
+                return;
+            }
+            let mut emit = lock(&self.activity_emit);
+            let wait = emit.last.map(|t| ACTIVITY_THROTTLE.saturating_sub(t.elapsed())).filter(|w| !w.is_zero());
+            if let (false, Some(wait)) = (always, wait) {
+                if !emit.pending {
+                    emit.pending = true;
+                    let sh = Arc::downgrade(self);
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(wait).await;
+                        if let Some(sh) = sh.upgrade() {
+                            sh.flush_activity();
+                        }
+                    });
+                }
+                return;
+            }
+            emit.last = Some(Instant::now());
+            emit.pending = false;
+            run.summary()
+        };
+        self.events.run_updated(&summary);
+    }
+
+    /// Sends a throttled activity change, unless another update sent it.
+    fn flush_activity(&self) {
+        let summary = {
+            let run = lock(&self.run);
+            let mut emit = lock(&self.activity_emit);
+            if !emit.pending || self.deleted.load(Ordering::SeqCst) {
+                return;
+            }
+            emit.pending = false;
+            emit.last = Some(Instant::now());
+            run.summary()
+        };
+        self.events.run_updated(&summary);
+    }
+
+    /// Shows a tool as running; returns its token for [`Self::end_activity`].
+    pub fn begin_activity(self: &Arc<Self>, tool: &str, args: &Value, sub: Option<&str>) -> u64 {
+        let token = self.next_activity.fetch_add(1, Ordering::SeqCst);
+        let activity = Activity {
+            tool: tool.to_string(),
+            label: activity_label(tool, args),
+            sub: sub.map(str::to_string),
+            started_at: now(),
+            token,
+            ..Default::default()
+        };
+        self.update_activity(true, |run| {
+            run.progress.activity = Some(activity);
+            true
+        });
+        token
+    }
+
+    /// Clears the activity, unless another call (a parallel sub-run) has
+    /// replaced it since.
+    pub fn end_activity(self: &Arc<Self>, token: u64) {
+        self.update_activity(true, |run| match &run.progress.activity {
+            Some(a) if a.token == token => {
+                run.progress.activity = None;
+                true
+            }
+            _ => false,
+        });
+    }
+
+    /// Applies progress a tool sent while running.
+    pub fn progress(self: &Arc<Self>, update: ProgressUpdate) {
+        match update {
+            ProgressUpdate::Detail(text) => self.update_activity(false, |run| match run.progress.activity.as_mut() {
+                Some(a) => {
+                    a.detail = Some(one_line(&text, 160));
+                    true
+                }
+                None => false,
+            }),
+            ProgressUpdate::Source(chip) => self.update_activity(false, |run| match run.progress.activity.as_mut() {
+                Some(a) => {
+                    match a.sources.iter_mut().find(|c| c.source == chip.source) {
+                        Some(c) => *c = chip,
+                        None => a.sources.push(chip),
+                    }
+                    true
+                }
+                None => false,
+            }),
+            ProgressUpdate::Count { key, by } => self.count(&key, by),
+            ProgressUpdate::Phase { id, status, detail, done, total } => self.set_phase(&id, status, detail, done, total),
+            ProgressUpdate::Plan { n, status, note, task } => {
+                self.update(|run| run.progress.update_plan(n, status, note, task));
+            }
+        }
+    }
+
+    /// The kind's phases, all pending.
+    pub fn set_phases(&self, phases: Vec<Phase>) {
+        self.update(|run| run.progress.phases = phases);
+    }
+
+    /// Changes one phase (see [`super::types::RunProgress::set_phase`]).
+    pub fn set_phase(&self, id: &str, status: PhaseStatus, detail: Option<String>, done: Option<u32>, total: Option<u32>) {
+        self.update(|run| run.progress.set_phase(id, status, detail, done, total));
+    }
+
+    /// Adds `by` to a counter.
+    pub fn count(&self, key: &str, by: u64) {
+        self.update(|run| run.progress.count(key, by));
+    }
+
+    /// A new plan (shown as a checklist).
+    pub fn set_plan(&self, items: Vec<PlanItem>) {
+        self.update(|run| run.progress.set_plan(items));
+    }
+
+    /// Where the tools of this run send their progress.
+    pub fn progress_sink(self: &Arc<Self>) -> ProgressFn {
+        let sh = self.clone();
+        Arc::new(move |u| sh.progress(u))
     }
 
     /// The overlay's changes as the run's changeset (decisions not made yet).
@@ -163,6 +320,12 @@ impl RunShared {
 
     pub fn set_deadline(&self, timeout: Duration) {
         *lock(&self.deadline) = Some(Instant::now() + timeout);
+        lock(&self.run).deadline_at = Some(now() + timeout.as_secs() as i64);
+    }
+
+    /// `deadline_at` from the time left (after a pause for the user).
+    fn sync_deadline_at(&self, run: &mut AgentRun) {
+        run.deadline_at = lock(&self.deadline).map(|d| now() + d.saturating_duration_since(Instant::now()).as_secs() as i64);
     }
 
     /// Time left for the run; `None` once it is used up.
@@ -196,6 +359,7 @@ fn message_step(text: &str, kind: StepKind, notice: bool, sub: Option<&str>) -> 
         at: 0,
         sub: sub.map(str::to_string),
         notice,
+        data: None,
     }
 }
 
@@ -328,6 +492,8 @@ impl RunCx {
         sh.update(|run| {
             run.status = RunStatus::AwaitingInput;
             run.awaiting = Some(payload);
+            // Waiting doesn't count against the time limit.
+            run.deadline_at = None;
         });
         lock(&sh.permit).take();
         let got = sh.cancel.run(async { rx.await.map_err(|_| AiError::cancelled()) }).await;
@@ -343,13 +509,22 @@ impl RunCx {
         if let Some(d) = lock(&sh.deadline).as_mut() {
             *d += paused.elapsed();
         }
-        sh.update(|run| run.status = RunStatus::Running);
+        sh.update(|run| {
+            run.status = RunStatus::Running;
+            sh.sync_deadline_at(run);
+        });
         Ok(input)
     }
 
     /// Runs several loops at once (e.g. a reviewer ensemble); results in
     /// the order of `specs`. They share the run's overlay, steps and cancel.
     pub async fn sub_runs(&self, specs: Vec<LoopSpec>) -> Vec<AiResult<LoopOutcome>> {
+        self.sub_runs_with(specs, |_| {}).await
+    }
+
+    /// [`Self::sub_runs`], calling `done(i)` as each loop ends (in the
+    /// order they end).
+    pub async fn sub_runs_with(&self, specs: Vec<LoopSpec>, mut done: impl FnMut(usize)) -> Vec<AiResult<LoopOutcome>> {
         let mut set = tokio::task::JoinSet::new();
         let count = specs.len();
         for (i, spec) in specs.into_iter().enumerate() {
@@ -360,6 +535,7 @@ impl RunCx {
         while let Some(joined) = set.join_next().await {
             if let Ok((i, r)) = joined {
                 out[i] = Some(r);
+                done(i);
             }
         }
         out.into_iter()
@@ -469,6 +645,8 @@ impl RunCx {
                     return Ok(LoopOutcome { text: last_text, report: None, end: LoopEnd::LoopGuard(call.name.clone()), steps, messages });
                 }
                 let mut saved_note: Option<String> = None;
+                let mut data: Option<Value> = None;
+                let mut activity: Option<ActivityGuard> = None;
                 let (content, ok, summary, write) = if call.invalid_arguments.is_some() {
                     // Cut off at the output limit or unreadable: the model is
                     // told why and tries again (smaller edits for a cut-off).
@@ -478,7 +656,9 @@ impl RunCx {
                     let m = super::tools::memory::REFUSED_AFTER_WEB.to_string();
                     (m, false, "Didn't save a note (the run read outside text)".to_string(), false)
                 } else if let Some(tool) = tool {
+                    activity = Some(ActivityGuard { sh: &sh, token: sh.begin_activity(&call.name, &call.arguments, sub.as_deref()) });
                     let out = sh.cancel.run(async { Ok(tool.call(&self.tool_cx, &call.arguments).await) }).await?;
+                    data = out.data.as_deref().map(cap_data);
                     if let Some(Control::Finish(r)) = out.control {
                         report = Some(r);
                     }
@@ -499,7 +679,9 @@ impl RunCx {
                 step.result_summary = summary.clone();
                 step.result = Some(cap(&content, 2000));
                 step.ms = started.elapsed().as_millis() as u64;
+                step.data = data;
                 sh.record(step, write);
+                drop(activity);
                 if write {
                     // The files changed: the same check or read again is
                     // not a repeat any more.
@@ -535,6 +717,66 @@ fn tool_step(name: &str, args: &Value, sub: Option<&str>) -> Step {
         at: 0,
         sub: sub.map(str::to_string),
         notice: false,
+        data: None,
+    }
+}
+
+/// Ends the activity of a tool call however the call ends (also on cancel).
+struct ActivityGuard<'a> {
+    sh: &'a Arc<RunShared>,
+    token: u64,
+}
+
+impl Drop for ActivityGuard<'_> {
+    fn drop(&mut self) {
+        self.sh.end_activity(self.token);
+    }
+}
+
+fn arg(args: &Value, k: &str, max: usize) -> String {
+    match args.get(k) {
+        Some(Value::String(s)) => one_line(s, max),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Plain words for a running tool, from its arguments.
+pub fn activity_label(tool: &str, args: &Value) -> String {
+    let quoted = |k: &str| {
+        let v = arg(args, k, 60);
+        if v.is_empty() { String::new() } else { format!(": \"{v}\"") }
+    };
+    let path = |verb: &str| {
+        let p = arg(args, "path", 80);
+        if p.is_empty() { format!("{verb} a file") } else { format!("{verb} {p}") }
+    };
+    match tool {
+        "list_files" => "Listing the project's files".into(),
+        "read_file" => path("Reading"),
+        "search" => format!("Searching the project{}", quoted("pattern")),
+        "edit_file" => path("Editing"),
+        "write_file" => path("Writing"),
+        "delete_file" => path("Deleting"),
+        "compile_check" => "Compiling a private copy".into(),
+        "explain_log" => "Explaining a compile issue".into(),
+        "search_papers" => format!("Searching papers{}", quoted("query")),
+        "get_bibtex" => format!("Getting BibTeX{}", quoted("id")),
+        "verify_citation" => format!("Checking citation{}", quoted("key")),
+        "fetch_url" => format!("Reading a web page{}", quoted("url")),
+        "web_search" => format!("Searching the web{}", quoted("query")),
+        "read_memory" => "Reading the project memory".into(),
+        "remember" => "Saving a note".into(),
+        "submit_report" => "Handing in the report".into(),
+        "update_plan" => "Updating the plan".into(),
+        "submit_plan" => "Handing in the plan".into(),
+        other => {
+            let mut words = other.replace('_', " ");
+            if let Some(c) = words.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            words
+        }
     }
 }
 

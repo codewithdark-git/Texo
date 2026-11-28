@@ -7,6 +7,7 @@ import { AiSettingsSection } from "../ai/AiSettingsSection";
 import { api, errorText, type Compiler, type Toolchains } from "../lib/api";
 import { getEditorPrefs, onEditorPrefs, setEditorPrefs, type EditorPrefs } from "../lib/editorPrefs";
 import { getShowHidden, setShowHidden } from "../lib/hiddenFiles";
+import { getMotionPref, setMotionPref, type MotionPref } from "../lib/motion";
 import { getThemePref, onThemeChange, setThemePref, type ThemePref } from "../lib/theme";
 import { useApp } from "../store";
 import { toast, useUi } from "../ui";
@@ -32,6 +33,7 @@ const FONT_MAX = 32;
 
 function AppearanceSection() {
   const [pref, setPref] = useState<ThemePref>(getThemePref);
+  const [motion, setMotion] = useState<MotionPref>(getMotionPref);
   useEffect(() => onThemeChange(() => setPref(getThemePref())), []);
   return (
     <>
@@ -48,6 +50,21 @@ function AppearanceSection() {
           onChange={(v) => {
             setThemePref(v);
             setPref(v);
+          }}
+        />
+      </Row>
+      <Row label="Motion" help="Reduced turns slides and pulses into quick fades. Match system follows your computer's setting.">
+        <Choice
+          label="Motion"
+          value={motion}
+          options={[
+            ["system", "Match system"],
+            ["reduce", "Reduced"],
+            ["full", "Full"],
+          ]}
+          onChange={(v) => {
+            setMotionPref(v);
+            setMotion(v);
           }}
         />
       </Row>

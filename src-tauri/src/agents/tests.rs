@@ -19,18 +19,28 @@ use crate::ai::http::{ApiKey, Cancel, Endpoint};
 use crate::ai::llm::{Msg, ProviderId, RetryPolicy};
 use crate::ai::mock::{Canned, MockServer};
 
+/// One event in the order the window got it.
+#[derive(Debug, Clone)]
+pub(super) enum Ev {
+    Updated(Box<RunSummary>),
+    Step(Box<StepEvent>),
+}
+
 #[derive(Default)]
 pub(super) struct Rec {
     pub(super) updates: Mutex<Vec<RunSummary>>,
     pub(super) steps: Mutex<Vec<StepEvent>>,
+    pub(super) log: Mutex<Vec<Ev>>,
 }
 
 impl Events for Rec {
     fn run_updated(&self, run: &RunSummary) {
         self.updates.lock().unwrap().push(run.clone());
+        self.log.lock().unwrap().push(Ev::Updated(Box::new(run.clone())));
     }
     fn step(&self, e: &StepEvent) {
         self.steps.lock().unwrap().push(e.clone());
+        self.log.lock().unwrap().push(Ev::Step(Box::new(e.clone())));
     }
     fn message(&self, _e: &MessageEvent) {}
 }
@@ -470,4 +480,249 @@ fn deleting_a_working_run_keeps_its_journal_gone() {
     std::thread::sleep(Duration::from_millis(200));
     assert!(!journal.exists(), "the journal came back");
     assert!(!rt.list(&root).iter().any(|r| r.id == id));
+}
+
+// ----------------------------------------------------------- progress --
+
+/// A tool that takes a while and hands back paper data.
+struct SlowPapers;
+
+impl super::tools::registry::Tool for SlowPapers {
+    fn spec(&self) -> crate::ai::llm::ToolSpec {
+        crate::ai::llm::ToolSpec {
+            name: "slow_papers".into(),
+            description: "Slow test tool.".into(),
+            parameters: json!({"type": "object", "properties": {"query": {"type": "string"}}}),
+        }
+    }
+
+    fn call<'a>(&'a self, cx: &'a super::tools::registry::ToolCx, _args: &'a Value) -> BoxFut<'a, super::tools::registry::ToolOutput> {
+        Box::pin(async move {
+            cx.progress(ProgressUpdate::Source(SourceChip { source: "arXiv".into(), state: SourceState::Pending, detail: None }));
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let papers: Vec<Value> = (0..14).map(|i| json!({"title": format!("Paper {i}"), "abstract": "x".repeat(1000)})).collect();
+            super::tools::registry::ToolOutput::ok("14 papers", "Found 14 papers").with_data(json!({ "papers": papers }))
+        })
+    }
+}
+
+struct Slow;
+
+impl AgentKind for Slow {
+    fn id(&self) -> &'static str {
+        "slow"
+    }
+    fn label(&self) -> &'static str {
+        "Slow test"
+    }
+    fn system_prompt(&self) -> String {
+        "Test.".into()
+    }
+    fn tool_names(&self) -> Vec<&'static str> {
+        vec!["read_file"]
+    }
+    fn extra_tools(&self) -> Vec<Arc<dyn super::tools::registry::Tool>> {
+        vec![Arc::new(SlowPapers)]
+    }
+}
+
+#[test]
+fn a_running_tool_shows_as_activity_until_its_step_is_recorded() {
+    let (_d, root) = project();
+    let server = MockServer::start(vec![call("s1", "slow_papers", json!({"query": "diffusion"})), text("Found them.")]);
+    let rec = Arc::new(Rec::default());
+    let mut kinds = Registry::default();
+    kinds.register(Arc::new(Slow));
+    let rt = runtime(&server, rec.clone(), kinds);
+    let id = rt.start(root.clone(), "p".into(), request("slow", "Find papers")).unwrap().id;
+    let run = wait(&rt, &root, &id, finished);
+    assert_eq!(run.status, RunStatus::Done, "{:?}", run.error);
+
+    // run-updated with the activity → the step → run-updated without it.
+    let log = rec.log.lock().unwrap().clone();
+    let step_at = log
+        .iter()
+        .position(|e| matches!(e, Ev::Step(s) if s.step.tool.as_deref() == Some("slow_papers")))
+        .expect("the tool's step");
+    let busy = log[..step_at].iter().rposition(|e| {
+        matches!(e, Ev::Updated(u) if u.progress.activity.as_ref().is_some_and(|a| a.tool == "slow_papers"))
+    });
+    let busy = busy.expect("an update while the tool ran");
+    let Ev::Updated(u) = &log[busy] else { unreachable!() };
+    assert_eq!(u.progress.activity.as_ref().unwrap().label, "Slow papers");
+    assert!(
+        log[..step_at].iter().any(|e| matches!(e, Ev::Updated(u) if u.progress.activity.as_ref().is_some_and(|a| a.sources.len() == 1))),
+        "the source chip reached the window"
+    );
+    assert!(
+        log[step_at + 1..].iter().any(|e| matches!(e, Ev::Updated(u) if u.progress.activity.is_none())),
+        "the activity is cleared after the step"
+    );
+    assert!(run.progress.activity.is_none());
+
+    // The tool's data is kept in the step, capped.
+    let step = run.steps.iter().find(|s| s.tool.as_deref() == Some("slow_papers")).unwrap();
+    let papers = step.data.as_ref().unwrap()["papers"].as_array().unwrap();
+    assert_eq!(papers.len(), MAX_DATA_PAPERS);
+    assert!(papers[0]["abstract"].as_str().unwrap().chars().count() <= MAX_DATA_ABSTRACT + 1);
+    // The model saw the tool's text, not its data.
+    assert!(!server.recorded()[1].json().to_string().contains("Paper 13"));
+    // The journal never holds an activity.
+    let journal = fs::read_to_string(root.join(format!(".texo/ai/runs/{id}.json"))).unwrap();
+    assert!(journal.contains("\"activity\": null"), "{journal}");
+}
+
+#[test]
+fn a_source_sent_right_after_the_start_shows_while_the_tool_runs() {
+    let (_d, root) = project();
+    let server = MockServer::start(vec![call("s1", "slow_papers", json!({"query": "diffusion"})), text("Found them.")]);
+    let rec = Arc::new(Rec::default());
+    let mut kinds = Registry::default();
+    kinds.register(Arc::new(Slow));
+    let rt = runtime(&server, rec.clone(), kinds);
+    let id = rt.start(root.clone(), "p".into(), request("slow", "Find papers")).unwrap().id;
+    wait(&rt, &root, &id, finished);
+
+    // The chip is sent within the throttle time of the start: it must still
+    // reach the window during the tool's 300 ms, not only with its step.
+    let log = rec.log.lock().unwrap().clone();
+    let step_at = log
+        .iter()
+        .position(|e| matches!(e, Ev::Step(s) if s.step.tool.as_deref() == Some("slow_papers")))
+        .expect("the tool's step");
+    let chip_at = log[..step_at]
+        .iter()
+        .position(|e| matches!(e, Ev::Updated(u) if u.progress.activity.as_ref().is_some_and(|a| a.sources.len() == 1)))
+        .expect("the chip reached the window");
+    // ...and not only with the update that records the step.
+    let (Ev::Updated(u), Ev::Step(st)) = (&log[chip_at], &log[step_at]) else { unreachable!() };
+    assert!(u.step_count < st.step.n as usize, "the chip only came with the step");
+}
+
+#[test]
+fn activity_only_updates_do_not_rewrite_the_journal() {
+    let (_d, root) = project();
+    let rec = Arc::new(Rec::default());
+    let run = AgentRun { id: "20260101-000000-abcdef12".into(), project: "p".into(), kind: "plain".into(), ..Default::default() };
+    let sh = Arc::new(super::run_loop::RunShared::new(
+        root.clone(),
+        request("plain", "x"),
+        run,
+        rec.clone(),
+        Arc::new(tokio::sync::Semaphore::new(1)),
+    ));
+    sh.update(|_| {});
+    let journal = root.join(".texo/ai/runs/20260101-000000-abcdef12.json");
+    assert!(journal.exists());
+    fs::remove_file(&journal).unwrap();
+
+    let token = sh.begin_activity("search_papers", &json!({"query": "diffusion transformers"}), None);
+    sh.progress(ProgressUpdate::Detail("Asking arXiv".into()));
+    sh.progress(ProgressUpdate::Source(SourceChip { source: "arXiv".into(), state: SourceState::Ok, detail: Some("4".into()) }));
+    assert!(!journal.exists(), "activity-only updates don't save");
+    let live = sh.snapshot().progress.activity.unwrap();
+    assert_eq!(live.label, "Searching papers: \"diffusion transformers\"");
+    assert_eq!(live.detail.as_deref(), Some("Asking arXiv"));
+    assert_eq!(live.sources.len(), 1);
+    // Sub-progress right after the start is held back; start and end aren't.
+    let shown: Vec<bool> = rec.updates.lock().unwrap().iter().map(|u| u.progress.activity.is_some()).collect();
+    assert_eq!(shown, [false, true], "{shown:?}");
+    // It goes out (once, with both changes) when the throttle time is up.
+    std::thread::sleep(super::run_loop::ACTIVITY_THROTTLE * 3);
+    let updates = rec.updates.lock().unwrap().clone();
+    assert_eq!(updates.len(), 3, "one held-back update");
+    let late = updates[2].progress.activity.as_ref().unwrap();
+    assert_eq!((late.detail.as_deref(), late.sources.len()), (Some("Asking arXiv"), 1));
+    assert!(!journal.exists(), "nor does the late update save");
+
+    // Another call took the slot: an old token doesn't clear it.
+    let other = sh.begin_activity("read_file", &json!({"path": "main.tex"}), Some("Methods"));
+    sh.end_activity(token);
+    assert_eq!(sh.snapshot().progress.activity.unwrap().label, "Reading main.tex");
+    sh.end_activity(other);
+    assert!(sh.snapshot().progress.activity.is_none());
+    assert!(!journal.exists());
+
+    // A real change saves, without the activity.
+    sh.begin_activity("compile_check", &json!({}), None);
+    sh.count("papersFound", 3);
+    let saved: AgentRun = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    assert!(saved.progress.activity.is_none());
+    assert_eq!(saved.progress.counts["papersFound"], 3);
+    assert!(sh.snapshot().progress.activity.is_some(), "still shown in the window");
+}
+
+#[test]
+fn step_data_is_left_out_when_absent() {
+    let step = Step {
+        n: 1,
+        kind: StepKind::ToolCall,
+        tool: Some("read_file".into()),
+        args: None,
+        result_summary: "Read".into(),
+        result: None,
+        text: None,
+        ok: true,
+        ms: 0,
+        at: 0,
+        sub: None,
+        notice: false,
+        data: None,
+    };
+    let v = serde_json::to_value(&step).unwrap();
+    assert!(v.get("data").is_none(), "{v}");
+    let with = Step { data: Some(json!({"papers": []})), ..step };
+    assert_eq!(serde_json::to_value(&with).unwrap()["data"], json!({"papers": []}));
+}
+
+#[test]
+fn a_journal_from_texo_1_2_without_progress_loads() {
+    let (_d, root) = project();
+    let id = "20251001-101010-0a1b2c3d";
+    let old = json!({
+        "version": 1, "id": id, "project": "p", "kind": "task", "profileId": null, "profileName": null,
+        "title": "Add a greeting", "prompt": "Add a greeting", "attachments": [], "status": "done",
+        "model": "test-model", "provider": "Test AI",
+        "steps": [{"n": 1, "kind": "toolCall", "tool": "read_file", "args": {"path": "main.tex"},
+            "resultSummary": "Read main.tex", "ok": true, "ms": 4, "at": 1759313410}],
+        "changeset": [], "report": null, "finalMessage": "Done.",
+        "usage": {"inputTokens": 10, "outputTokens": 2, "llmCalls": 1, "toolCalls": 1},
+        "startedAt": 1759313400, "finishedAt": 1759313420, "error": null, "awaiting": null,
+        "startCommit": null, "applyCommits": [], "options": {}
+    });
+    let dir = root.join(".texo/ai/runs");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(format!("{id}.json")), serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+    let run = super::journal::load(&root, id).unwrap();
+    assert_eq!(run.progress, RunProgress::default());
+    assert_eq!((run.max_steps, run.deadline_at), (0, None));
+    assert!(run.steps[0].data.is_none());
+    let s = serde_json::to_value(run.summary()).unwrap();
+    assert_eq!(s["progress"], json!({"phases": [], "plan": [], "activity": null, "counts": {}}));
+    assert_eq!(s["maxSteps"], 0);
+}
+
+#[test]
+fn run_summaries_carry_the_kinds_step_limits() {
+    let (_d, root) = project();
+    let server = MockServer::start(vec![]);
+    let rt = runtime(&server, Arc::new(Rec::default()), Registry::default());
+    let mut ids = Vec::new();
+    for (kind, steps) in [("fixer", 16), ("reviewer", 40), ("task", 24)] {
+        let s = rt.start(root.clone(), "p".into(), request(kind, "Go")).unwrap();
+        assert_eq!(s.max_steps, steps, "{kind}");
+        assert_eq!(serde_json::to_value(&s).unwrap()["maxSteps"], steps);
+        ids.push(s.id);
+    }
+    let mut req = request("task", "Go");
+    req.options.max_steps = Some(7);
+    let s = rt.start(root.clone(), "p".into(), req).unwrap();
+    assert_eq!(s.max_steps, 7, "a profile's limit wins");
+    ids.push(s.id);
+    for id in &ids {
+        rt.cancel(id);
+    }
+    for id in &ids {
+        wait(&rt, &root, id, finished);
+    }
 }

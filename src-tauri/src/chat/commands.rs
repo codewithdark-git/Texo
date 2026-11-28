@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager as _, State};
 
 use super::engine::{self, ChatEvent, ChatSendRequest, EventBody, TurnConfig, VisionHelper};
 use super::store::{self, Chat, ChatMessage, ChatSummary};
@@ -203,7 +203,11 @@ pub async fn ai_chat_send(
 
     let net = match web_settings::net_ctx(&app, cancel.clone()).await {
         Ok(n) => n,
-        Err(_) => NetCtx::new(cancel.clone()),
+        Err(_) => {
+            let mut n = NetCtx::new(cancel.clone());
+            crate::library::pipeline::attach(&mut n, app.try_state::<crate::library::LibraryState>().and_then(|s| s.0.clone()));
+            n
+        }
     };
     let (chat_id, rid) = (chat.id.clone(), request_id.clone());
     let emitter = app.clone();

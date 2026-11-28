@@ -9,11 +9,12 @@ import type { ChatMessage, ProposedTask, ToolUse } from "../../lib/chatApi";
 import { agentsApi } from "../../lib/agentsApi";
 import { errorText } from "../../lib/api";
 import { toast } from "../../ui";
-import { insertAtCursor } from "../../workspace/editorBridge";
 import { baseName } from "../../workspace/paths";
-import { useAiPanel } from "../panel/aiPanelStore";
+import { useRunFocus } from "../agents/focusStore";
+import { useRuns } from "../agents/runsStore";
 import { taskKey, useChat, type PendingAnswer } from "./chatStore";
 import { dirtyBuffers } from "./composerActions";
+import { insertCode } from "./insertCode";
 import { isOpenableLink, renderMarkdown } from "./markdown";
 
 /** Clicks on code-block buttons and links inside rendered Markdown. */
@@ -29,7 +30,7 @@ function onMarkdownClick(e: MouseEvent<HTMLDivElement>, codes: string[]) {
         () => toast("Texo couldn't copy to the clipboard.", "error"),
       );
     } else {
-      const file = insertAtCursor(code);
+      const file = insertCode(code);
       if (file) toast(`Inserted into ${baseName(file)}. Ctrl+Z takes it out again.`, "success");
       else toast("Open a file in the editor first, then insert.", "info");
     }
@@ -136,15 +137,16 @@ function TaskCard({ task }: { task: ProposedTask }) {
     const files = task.files.filter(Boolean);
     const prompt = files.length ? `${task.prompt}\n\nFiles to work on: ${files.join(", ")}` : task.prompt;
     try {
-      await agentsApi.start(project, {
+      const started = await agentsApi.start(project, {
         kind: "task",
         prompt,
         dirtyBuffers: dirtyBuffers(),
         options: { title: task.prompt.split("\n")[0].slice(0, 80) },
       });
       setState("started");
-      toast("Task started. Its changes wait for your review in the Agents tab.", "success");
-      useAiPanel.getState().show("agents");
+      toast("Task started. Its changes wait for your review in its tab.", "success");
+      useRuns.getState().noteRun(started);
+      useRunFocus.getState().focus(started.id);
     } catch (err) {
       setState("idle");
       toast(errorText(err), "error");
@@ -248,17 +250,20 @@ export function MessageList({ messages, pending }: { messages: ChatMessage[]; pe
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
-      className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 text-[13px]"
+      className="min-h-0 flex-1 overflow-y-auto px-4 py-4 text-[13px]"
     >
-      {messages.map((m, i) =>
-        m.role === "user" ? <UserMessage key={m.id} message={m} /> : <AssistantMessage key={m.id} message={m} last={i === lastAssistant} />,
-      )}
-      {pending && (
-        <>
-          <UserMessage message={pending.user} sending />
-          <StreamingMessage pending={pending} />
-        </>
-      )}
+      {/* A readable column in a wide editor area. */}
+      <div className="mx-auto w-full max-w-3xl space-y-4">
+        {messages.map((m, i) =>
+          m.role === "user" ? <UserMessage key={m.id} message={m} /> : <AssistantMessage key={m.id} message={m} last={i === lastAssistant} />,
+        )}
+        {pending && (
+          <>
+            <UserMessage message={pending.user} sending />
+            <StreamingMessage pending={pending} />
+          </>
+        )}
+      </div>
     </div>
   );
 }

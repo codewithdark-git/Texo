@@ -33,6 +33,7 @@ import type { GetEnv } from "./view/commands";
 import { getModel, useWorkspace } from "../workspace/store";
 import { setActiveEditor, switchMode, takeVisualStart, type ActiveEditor } from "../workspace/editorBridge";
 import { zoomBy } from "../workspace/EditorPane";
+import { mayAutoFocus } from "../workspace/tabFocus";
 import { useCompile } from "../workspace/compileStore";
 import { DEFAULT_EDITOR_PREFS, getEditorPrefs, onEditorPrefs } from "../lib/editorPrefs";
 import { api } from "../lib/api";
@@ -224,7 +225,7 @@ export default function VisualPane({ path }: { path: string }) {
         } else if (scrollEl) scrollEl.scrollTop = entry.scrollTop;
         tracking = true;
         onScroll();
-        view.focus();
+        if (mayAutoFocus()) view.focus();
       });
 
       const active: ActiveEditor = {

@@ -100,6 +100,8 @@ pub fn mark_interrupted(run: &mut AgentRun) {
     run.status = RunStatus::Interrupted;
     run.finished_at.get_or_insert_with(now);
     run.awaiting = None;
+    run.deadline_at = None;
+    run.progress.settle(RunStatus::Interrupted);
     if run.error.is_none() {
         run.error = Some(if run.changeset.is_empty() {
             "Texo was closed while this run was working, so it stopped.".into()
@@ -144,6 +146,7 @@ mod tests {
             at: 10,
             sub: None,
             notice: false,
+            data: None,
         });
         a.changeset.push(ChangeEntry { file: "main.tex".into(), base_text: Some("a".into()), new_text: Some("b".into()), ..Default::default() });
         save(d.path(), &a).unwrap();
@@ -170,5 +173,22 @@ mod tests {
         assert!(load(d.path(), "run-a").is_err());
         remove(d.path(), "run-a").unwrap();
         assert!(load(d.path(), "../x").is_err());
+    }
+
+    #[test]
+    fn an_interrupted_run_has_no_phase_still_running() {
+        use crate::agents::types::{Phase, PhaseStatus, PlanItem, PlanStatus};
+        let mut r = run("run-i", RunStatus::Running, 10);
+        r.deadline_at = Some(now() + 600);
+        r.progress.phases = vec![Phase::new("checks", "Automatic checks"), Phase::new("reviewers", "Reviewers"), Phase::new("report", "Report")];
+        r.progress.set_phase("checks", PhaseStatus::Done, None, None, None);
+        r.progress.set_phase("reviewers", PhaseStatus::Active, None, Some(1), Some(3));
+        r.progress.plan = vec![PlanItem { n: 1, task: "A".into(), status: PlanStatus::Active, note: None }];
+        mark_interrupted(&mut r);
+        let phases: Vec<PhaseStatus> = r.progress.phases.iter().map(|p| p.status).collect();
+        assert_eq!(phases, [PhaseStatus::Done, PhaseStatus::Failed, PhaseStatus::Skipped]);
+        assert_eq!(r.progress.phase("reviewers").unwrap().done, Some(1));
+        assert_eq!(r.progress.plan[0].status, PlanStatus::NotDone);
+        assert_eq!(r.deadline_at, None);
     }
 }
