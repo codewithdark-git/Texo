@@ -12,6 +12,7 @@ import { toast } from "../../ui";
 import { useChat } from "./chatStore";
 import { activeTextFile, attachFiles, CHAT_DROP_ATTR, currentFileContext, dirtyBuffers } from "./composerActions";
 import { applyMention, mentionableFiles, mentionQuery, suggestMentions, type MentionQuery } from "./mentions";
+import { buildSendInput } from "./sendInput";
 
 const ACCEPT = "image/png,image/jpeg,image/gif,image/webp,image/bmp,.pdf,.tex,.ltx,.bib,.sty,.cls,.bst,.txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.svg,.log,.py,.r,.m";
 
@@ -29,7 +30,8 @@ function loadModels(provider: AiProviderInfo["id"]): Promise<AiModel[]> {
   return p;
 }
 
-function ModelPicker({ provider, disabled }: { provider: AiProviderInfo; disabled: boolean }) {
+/** The model for the open chat; also used by the AI Chat bar under the editor. */
+export function ModelPicker({ provider, disabled, className = "max-w-[50%]" }: { provider: AiProviderInfo; disabled: boolean; className?: string }) {
   const chat = useChat((s) => s.current);
   const choice = useChat((s) => s.modelChoice[s.current?.id ?? ""]);
   const setChoice = useChat((s) => s.setModelChoice);
@@ -67,7 +69,7 @@ function ModelPicker({ provider, disabled }: { provider: AiProviderInfo; disable
         }
         setChoice(next);
       }}
-      className="h-7 min-w-0 max-w-[50%] flex-shrink truncate rounded-md border border-border bg-surface px-1.5 text-[11px] text-muted outline-none hover:text-text focus:border-accent"
+      className={`h-7 min-w-0 ${className} flex-shrink truncate rounded-md border border-border bg-surface px-1.5 text-[11px] text-muted outline-none hover:text-text focus:border-accent`}
     >
       <option value="">{defaultLabel}</option>
       {extra.map((m) => (
@@ -183,14 +185,9 @@ export function Composer({ provider, disabled, disabledReason }: { provider: AiP
   const submit = () => {
     if (!canSend) return;
     const file = includeContext && activeTextFile() ? currentFileContext() : undefined;
-    const ready = useChat.getState().attachments.filter((a) => a.status === "ready");
-    void useChat.getState().send({
-      text: draft,
-      attachments: ready.map((a) => (a.kind === "image" ? { name: a.name, mime: a.mime ?? "image/jpeg", dataUrl: a.dataUrl } : { name: a.name, mime: a.mime ?? "text/plain", text: a.text ?? "" })),
-      currentFile: file,
-      dirtyBuffers: dirtyBuffers(),
-      ...(choice ? { model: choice } : {}),
-    });
+    void useChat.getState().send(
+      buildSendInput({ text: draft, attachments: useChat.getState().attachments, currentFile: file, dirtyBuffers: dirtyBuffers(), model: choice }),
+    );
     setMention(null);
   };
 
